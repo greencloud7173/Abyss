@@ -1,6 +1,15 @@
 from typing import List, Optional
 from .logger import logger
 
+def _to_int(value) -> int:
+    # cocotb 2.x exposes signal/parameter values as LogicArray objects, which don't
+    # support arithmetic directly, so unwrap handles and coerce to a plain int.
+    if hasattr(value, "value"):
+        value = value.value
+    if isinstance(value, str):
+        return int(value, 2)
+    return int(value)
+
 def format_register(register: int) -> str:
     if register < 13:
         return f"R{register}"
@@ -99,17 +108,17 @@ def format_cycle(dut, cycle_id: int, thread_id: Optional[int] = None):
 
     for core in dut.cores:
         # Not exactly accurate, but good enough for now
-        if int(str(dut.thread_count.value), 2) <= core.i.value * dut.THREADS_PER_BLOCK.value:
+        if _to_int(dut.thread_count) <= _to_int(core.i) * _to_int(dut.THREADS_PER_BLOCK):
             continue
 
-        logger.debug(f"\n+--------------------- Core {core.i.value} ---------------------+")
+        logger.debug(f"\n+--------------------- Core {_to_int(core.i)} ---------------------+")
 
         instruction = str(core.core_instance.instruction.value)
         for thread in core.core_instance.threads:
-            if int(thread.i.value) < int(str(core.core_instance.thread_count.value), 2): # if enabled
-                block_idx = core.core_instance.block_id.value
-                block_dim = int(core.core_instance.THREADS_PER_BLOCK)
-                thread_idx = thread.register_instance.THREAD_ID.value
+            if _to_int(thread.i) < _to_int(core.core_instance.thread_count): # if enabled
+                block_idx = _to_int(core.core_instance.block_id)
+                block_dim = _to_int(core.core_instance.THREADS_PER_BLOCK)
+                thread_idx = _to_int(thread.register_instance.THREAD_ID)
                 idx = block_idx * block_dim + thread_idx
 
                 rs = int(str(thread.register_instance.rs.value), 2)
