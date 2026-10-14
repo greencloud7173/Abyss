@@ -42,16 +42,16 @@ module core #(
     // State
     reg [2:0] core_state;
     reg [2:0] fetcher_state;
-    reg [15:0] instruction;
+    reg [PROGRAM_MEM_DATA_BITS-1:0] instruction;
 
     // Intermediate Signals
-    reg [7:0] current_pc;
-    wire [7:0] next_pc[THREADS_PER_BLOCK-1:0];
-    reg [7:0] rs[THREADS_PER_BLOCK-1:0];
-    reg [7:0] rt[THREADS_PER_BLOCK-1:0];
+    reg [PROGRAM_MEM_ADDR_BITS-1:0] current_pc;
+    wire [PROGRAM_MEM_ADDR_BITS-1:0] next_pc[THREADS_PER_BLOCK-1:0];
+    reg [DATA_MEM_DATA_BITS-1:0] rs[THREADS_PER_BLOCK-1:0];
+    reg [DATA_MEM_DATA_BITS-1:0] rt[THREADS_PER_BLOCK-1:0];
     reg [1:0] lsu_state[THREADS_PER_BLOCK-1:0];
-    reg [7:0] lsu_out[THREADS_PER_BLOCK-1:0];
-    wire [7:0] alu_out[THREADS_PER_BLOCK-1:0];
+    reg [DATA_MEM_DATA_BITS-1:0] lsu_out[THREADS_PER_BLOCK-1:0];
+    wire [DATA_MEM_DATA_BITS-1:0] alu_out[THREADS_PER_BLOCK-1:0];
     
     // Decoded Instruction Signals
     reg [3:0] decoded_rd_address;
@@ -112,6 +112,7 @@ module core #(
 
     // Scheduler
     scheduler #(
+        .PROGRAM_MEM_ADDR_BITS(PROGRAM_MEM_ADDR_BITS),
         .THREADS_PER_BLOCK(THREADS_PER_BLOCK),
     ) scheduler_instance (
         .clk(clk),
@@ -133,7 +134,9 @@ module core #(
     generate
         for (i = 0; i < THREADS_PER_BLOCK; i = i + 1) begin : threads
             // ALU
-            alu alu_instance (
+            alu #(
+                .DATA_BITS(DATA_MEM_DATA_BITS)
+            ) alu_instance (
                 .clk(clk),
                 .reset(reset),
                 .enable(i < thread_count),
@@ -146,7 +149,10 @@ module core #(
             );
 
             // LSU
-            lsu lsu_instance (
+            lsu #(
+                .ADDR_BITS(DATA_MEM_ADDR_BITS),
+                .DATA_BITS(DATA_MEM_DATA_BITS)
+            ) lsu_instance (
                 .clk(clk),
                 .reset(reset),
                 .enable(i < thread_count),

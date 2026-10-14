@@ -102,8 +102,8 @@ The GPU is built to interface with an external global memory. Here, data memory 
 
 tiny-gpu data memory has the following specifications:
 
-- 8 bit addressability (256 total rows of data memory)
-- 8 bit data (stores values of <256 for each row)
+- 32 bit addressability
+- 32 bit data
 
 tiny-gpu program memory has the following specifications:
 

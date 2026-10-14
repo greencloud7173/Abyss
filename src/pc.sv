@@ -20,7 +20,7 @@ module pc #(
 
     // Control Signals
     input reg [2:0] decoded_nzp,
-    input reg [DATA_MEM_DATA_BITS-1:0] decoded_immediate,
+    input reg [PROGRAM_MEM_ADDR_BITS-1:0] decoded_immediate,
     input reg decoded_nzp_write_enable,
     input reg decoded_pc_mux, 
 

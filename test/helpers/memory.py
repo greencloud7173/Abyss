@@ -1,3 +1,4 @@
+from collections import defaultdict
 from typing import List
 from .logger import logger
 
@@ -6,7 +7,8 @@ class Memory:
         self.dut = dut
         self.addr_bits = addr_bits
         self.data_bits = data_bits
-        self.memory = [0] * (2**addr_bits)
+        # Sparse storage: a flat list of 2**addr_bits entries is not viable for 32-bit addresses
+        self.memory = defaultdict(int)
         self.channels = channels
         self.name = name
 
@@ -69,7 +71,7 @@ class Memory:
             self.mem_write_ready.value = int(''.join(format(w, '01b') for w in mem_write_ready), 2)
 
     def write(self, address, data):
-        if address < len(self.memory):
+        if 0 <= address < (1 << self.addr_bits):
             self.memory[address] = data
 
     def load(self, rows: List[int]):
@@ -87,13 +89,13 @@ class Memory:
         logger.info(header + " " * (table_size - len(header) - 1) + "|")
 
         logger.info("+" + "-" * (table_size - 3) + "+")
-        for i, data in enumerate(self.memory):
-            if i < rows:
-                if decimal:
-                    row = f"| {i:<4} | {data:<4}"
-                    logger.info(row + " " * (table_size - len(row) - 1) + "|")
-                else:
-                    data_bin = format(data, f'0{16}b')
-                    row = f"| {i:<4} | {data_bin} |"
-                    logger.info(row + " " * (table_size - len(row) - 1) + "|")
+        for i in range(rows):
+            data = self.memory[i]
+            if decimal:
+                row = f"| {i:<4} | {data:<4}"
+                logger.info(row + " " * (table_size - len(row) - 1) + "|")
+            else:
+                data_bin = format(data, f'0{self.data_bits}b')
+                row = f"| {i:<4} | {data_bin} |"
+                logger.info(row + " " * (table_size - len(row) - 1) + "|")
         logger.info("+" + "-" * (table_size - 3) + "+")

@@ -42,7 +42,7 @@ async def test_matadd(dut):
     ]
 
     # Data Memory
-    data_memory = Memory(dut=dut, addr_bits=8, data_bits=8, channels=4, name="data")
+    data_memory = Memory(dut=dut, addr_bits=32, data_bits=32, channels=4, name="data")
     data = [
         1, 2, 3, 4, # Matrix A (2 x 2)
         1, 2, 3, 4, # Matrix B (2 x 2)
