@@ -81,7 +81,7 @@ module decoder (
                 decoded_ret <= 0;
 
                 // Set the control signals for each instruction
-                case (instruction[15:12])
+                case (instruction[31:28])
                     NOP: begin 
                         // no-op
                     end

@@ -10,19 +10,19 @@ async def test_matadd(dut):
     # Program Memory
     program_memory = Memory(dut=dut, addr_bits=32, data_bits=32, channels=1, name="program")
     program = [
-        0b000000000000000000101000011011110, # MUL R0, %blockIdx, %blockDim
-        0b000000000000000000011000000001111, # ADD R0, R0, %threadIdx         ; i = blockIdx * blockDim + threadIdx
-        0b000000000000000001001000100000000, # CONST R1, #0                   ; baseA (matrix A base address)
-        0b000000000000000001001001000001000, # CONST R2, #8                   ; baseB (matrix B base address)
-        0b000000000000000001001001100010000, # CONST R3, #16                  ; baseC (matrix C base address)
-        0b000000000000000000011010000010000, # ADD R4, R1, R0                 ; addr(A[i]) = baseA + i
-        0b000000000000000000111010001000000, # LDR R4, R4                     ; load A[i] from global memory
-        0b000000000000000000011010100100000, # ADD R5, R2, R0                 ; addr(B[i]) = baseB + i
-        0b000000000000000000111010101010000, # LDR R5, R5                     ; load B[i] from global memory
-        0b000000000000000000011011001000101, # ADD R6, R4, R5                 ; C[i] = A[i] + B[i]
-        0b000000000000000000011011100110000, # ADD R7, R3, R0                 ; addr(C[i]) = baseC + i
-        0b000000000000000001000000001110110, # STR R7, R6                     ; store C[i] in global memory
-        0b000000000000000001111000000000000, # RET                            ; end of kernel
+        0b01010000000000000000000011011110, # MUL R0, %blockIdx, %blockDim
+        0b00110000000000000000000000001111, # ADD R0, R0, %threadIdx         ; i = blockIdx * blockDim + threadIdx
+        0b10010000000000000000000100000000, # CONST R1, #0                   ; baseA (matrix A base address)
+        0b10010000000000000000001000001000, # CONST R2, #8                   ; baseB (matrix B base address)
+        0b10010000000000000000001100010000, # CONST R3, #16                  ; baseC (matrix C base address)
+        0b00110000000000000000010000010000, # ADD R4, R1, R0                 ; addr(A[i]) = baseA + i
+        0b01110000000000000000010001000000, # LDR R4, R4                     ; load A[i] from global memory
+        0b00110000000000000000010100100000, # ADD R5, R2, R0                 ; addr(B[i]) = baseB + i
+        0b01110000000000000000010101010000, # LDR R5, R5                     ; load B[i] from global memory
+        0b00110000000000000000011001000101, # ADD R6, R4, R5                 ; C[i] = A[i] + B[i]
+        0b00110000000000000000011100110000, # ADD R7, R3, R0                 ; addr(C[i]) = baseC + i
+        0b10000000000000000000000001110110, # STR R7, R6                     ; store C[i] in global memory
+        0b11110000000000000000000000000000, # RET                            ; end of kernel
     ]
 
     # Data Memory

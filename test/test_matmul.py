@@ -10,35 +10,35 @@ async def test_matadd(dut):
     # Program Memory
     program_memory = Memory(dut=dut, addr_bits=32, data_bits=32, channels=1, name="program")
     program = [
-        0b00000000000000000101000011011110, # MUL R0, %blockIdx, %blockDim
-        0b00000000000000000011000000001111, # ADD R0, R0, %threadIdx         ; i = blockIdx * blockDim + threadIdx
-        0b00000000000000001001000100000001, # CONST R1, #1                   ; increment
-        0b00000000000000001001001000000010, # CONST R2, #2                   ; N (matrix inner dimension)
-        0b00000000000000001001001100000000, # CONST R3, #0                   ; baseA (matrix A base address)
-        0b00000000000000001001010000000100, # CONST R4, #4                   ; baseB (matrix B base address)
-        0b00000000000000001001010100001000, # CONST R5, #8                   ; baseC (matrix C base address)
-        0b00000000000000000110011000000010, # DIV R6, R0, R2                 ; row = i // N
-        0b00000000000000000101011101100010, # MUL R7, R6, R2
-        0b00000000000000000100011100000111, # SUB R7, R0, R7                 ; col = i % N
-        0b00000000000000001001100000000000, # CONST R8, #0                   ; acc = 0
-        0b00000000000000001001100100000000, # CONST R9, #0                   ; k = 0
+        0b01010000000000000000000011011110, # MUL R0, %blockIdx, %blockDim
+        0b00110000000000000000000000001111, # ADD R0, R0, %threadIdx         ; i = blockIdx * blockDim + threadIdx
+        0b10010000000000000000000100000001, # CONST R1, #1                   ; increment
+        0b10010000000000000000001000000010, # CONST R2, #2                   ; N (matrix inner dimension)
+        0b10010000000000000000001100000000, # CONST R3, #0                   ; baseA (matrix A base address)
+        0b10010000000000000000010000000100, # CONST R4, #4                   ; baseB (matrix B base address)
+        0b10010000000000000000010100001000, # CONST R5, #8                   ; baseC (matrix C base address)
+        0b01100000000000000000011000000010, # DIV R6, R0, R2                 ; row = i // N
+        0b01010000000000000000011101100010, # MUL R7, R6, R2
+        0b01000000000000000000011100000111, # SUB R7, R0, R7                 ; col = i % N
+        0b10010000000000000000100000000000, # CONST R8, #0                   ; acc = 0
+        0b10010000000000000000100100000000, # CONST R9, #0                   ; k = 0
                                             # LOOP:
-        0b00000000000000000101101001100010, #   MUL R10, R6, R2
-        0b00000000000000000011101010101001, #   ADD R10, R10, R9
-        0b00000000000000000011101010100011, #   ADD R10, R10, R3             ; addr(A[i]) = row * N + k + baseA
-        0b00000000000000000111101010100000, #   LDR R10, R10                 ; load A[i] from global memory
-        0b00000000000000000101101110010010, #   MUL R11, R9, R2
-        0b00000000000000000011101110110111, #   ADD R11, R11, R7
-        0b00000000000000000011101110110100, #   ADD R11, R11, R4             ; addr(B[i]) = k * N + col + baseB
-        0b00000000000000000111101110110000, #   LDR R11, R11                 ; load B[i] from global memory
-        0b00000000000000000101110010101011, #   MUL R12, R10, R11
-        0b00000000000000000011100010001100, #   ADD R8, R8, R12              ; acc = acc + A[i] * B[i]
-        0b00000000000000000011100110010001, #   ADD R9, R9, R1               ; increment k
-        0b00000000000000000010000010010010, #   CMP R9, R2
-        0b00000000000000000001100000001100, #   BRn LOOP                     ; loop while k < N
-        0b00000000000000000011100101010000, # ADD R9, R5, R0                 ; addr(C[i]) = baseC + i 
-        0b00000000000000001000000010011000, # STR R9, R8                     ; store C[i] in global memory
-        0b00000000000000001111000000000000  # RET                            ; end of kernel
+        0b01010000000000000000101001100010, #   MUL R10, R6, R2
+        0b00110000000000000000101010101001, #   ADD R10, R10, R9
+        0b00110000000000000000101010100011, #   ADD R10, R10, R3             ; addr(A[i]) = row * N + k + baseA
+        0b01110000000000000000101010100000, #   LDR R10, R10                 ; load A[i] from global memory
+        0b01010000000000000000101110010010, #   MUL R11, R9, R2
+        0b00110000000000000000101110110111, #   ADD R11, R11, R7
+        0b00110000000000000000101110110100, #   ADD R11, R11, R4             ; addr(B[i]) = k * N + col + baseB
+        0b01110000000000000000101110110000, #   LDR R11, R11                 ; load B[i] from global memory
+        0b01010000000000000000110010101011, #   MUL R12, R10, R11
+        0b00110000000000000000100010001100, #   ADD R8, R8, R12              ; acc = acc + A[i] * B[i]
+        0b00110000000000000000100110010001, #   ADD R9, R9, R1               ; increment k
+        0b00100000000000000000000010010010, #   CMP R9, R2
+        0b00010000000000000000100000001100, #   BRn LOOP                     ; loop while k < N
+        0b00110000000000000000100101010000, # ADD R9, R5, R0                 ; addr(C[i]) = baseC + i 
+        0b10000000000000000000000010011000, # STR R9, R8                     ; store C[i] in global memory
+        0b11110000000000000000000000000000  # RET                            ; end of kernel
     ]
 
     # Data Memory

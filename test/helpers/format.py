@@ -21,14 +21,16 @@ def format_register(register: int) -> str:
         return f"%threadIdx"
     
 def format_instruction(instruction: str) -> str:
+    # Instruction layout: opcode[31:28] | unused[27:12] | rd[11:8] | rs[7:4] | rt[3:0]
+    # `instruction` is MSB-first, so string offset = 32 - bit index - width.
     opcode = instruction[0:4]
-    rd = format_register(int(instruction[4:8], 2))
-    rs = format_register(int(instruction[8:12], 2))
-    rt = format_register(int(instruction[12:16], 2))
-    n = "N" if instruction[4] == 1 else ""
-    z = "Z" if instruction[5] == 1 else ""
-    p = "P" if instruction[6] == 1 else ""
-    imm = f"#{int(instruction[8:16], 2)}"
+    rd = format_register(int(instruction[20:24], 2))
+    rs = format_register(int(instruction[24:28], 2))
+    rt = format_register(int(instruction[28:32], 2))
+    n = "N" if instruction[20] == "1" else ""
+    z = "Z" if instruction[21] == "1" else ""
+    p = "P" if instruction[22] == "1" else ""
+    imm = f"#{int(instruction[24:32], 2)}"
 
     if opcode == "0000":
         return "NOP"
