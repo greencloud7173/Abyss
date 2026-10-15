@@ -6,10 +6,10 @@
 // > The core also has it's own scheduler to manage control flow
 // > Each core contains 1 fetcher & decoder, and register files, ALUs, LSUs, PC for each thread
 module core #(
-    parameter DATA_MEM_ADDR_BITS = 8,
-    parameter DATA_MEM_DATA_BITS = 8,
-    parameter PROGRAM_MEM_ADDR_BITS = 8,
-    parameter PROGRAM_MEM_DATA_BITS = 16,
+    parameter DATA_MEM_ADDR_BITS = 32,
+    parameter DATA_MEM_DATA_BITS = 32,
+    parameter PROGRAM_MEM_ADDR_BITS = 32,
+    parameter PROGRAM_MEM_DATA_BITS = 32,
     parameter THREADS_PER_BLOCK = 4
 ) (
     input wire clk,

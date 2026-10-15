@@ -8,8 +8,8 @@
 // > The NZP register value is set by the CMP instruction (based on >/=/< comparison) to 
 //   initiate the BRnzp instruction for branching
 module pc #(
-    parameter DATA_MEM_DATA_BITS = 8,
-    parameter PROGRAM_MEM_ADDR_BITS = 8
+    parameter DATA_MEM_DATA_BITS = 32,
+    parameter PROGRAM_MEM_ADDR_BITS = 32
 ) (
     input wire clk,
     input wire reset,
