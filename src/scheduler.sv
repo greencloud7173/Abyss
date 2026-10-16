@@ -8,14 +8,14 @@
 // 3. REQUEST - If we have an instruction that accesses memory, trigger the async memory requests from LSUs
 // 4. WAIT - Wait for all async memory requests to resolve (if applicable)
 // 5. EXECUTE - Execute computations on retrieved data from registers / memory
-// 6. UPDATE - Update register values (including NZP register) and program counter
+// 6. UPDATE - Update register values and program counter
 // > Each core has it's own scheduler where multiple threads can be processed with
 //   the same control flow at once.
 // > Technically, different instructions can branch to different PCs, requiring "branch divergence." In
 //   this minimal implementation, we assume no branch divergence (naive approach for simplicity)
 module scheduler #(
     parameter PROGRAM_MEM_ADDR_BITS = 8,
-    parameter THREADS_PER_BLOCK = 4,
+    parameter THREADS_PER_BLOCK = 4
 ) (
     input wire clk,
     input wire reset,
@@ -44,7 +44,7 @@ module scheduler #(
         REQUEST = 3'b011,     // Request data from registers or memory
         WAIT = 3'b100,        // Wait for response from memory if necessary
         EXECUTE = 3'b101,     // Execute ALU and PC calculations
-        UPDATE = 3'b110,      // Update registers, NZP, and PC
+        UPDATE = 3'b110,      // Update registers and PC
         DONE = 3'b111;        // Done executing this block
     
     always @(posedge clk) begin 

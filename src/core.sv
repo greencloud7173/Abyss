@@ -52,23 +52,24 @@ module core #(
     reg [1:0] lsu_state[THREADS_PER_BLOCK-1:0];
     reg [DATA_MEM_DATA_BITS-1:0] lsu_out[THREADS_PER_BLOCK-1:0];
     wire [DATA_MEM_DATA_BITS-1:0] alu_out[THREADS_PER_BLOCK-1:0];
+    wire [PROGRAM_MEM_ADDR_BITS-1:0] pc_result[THREADS_PER_BLOCK-1:0];
     
     // Decoded Instruction Signals
-    reg [3:0] decoded_rd_address;
-    reg [3:0] decoded_rs_address;
-    reg [3:0] decoded_rt_address;
-    reg [2:0] decoded_nzp;
-    reg [7:0] decoded_immediate;
+    reg [4:0] decoded_rd_address;
+    reg [4:0] decoded_rs_address;
+    reg [4:0] decoded_rt_address;
+    reg [31:0] decoded_immediate;
 
     // Decoded Control Signals
     reg decoded_reg_write_enable;           // Enable writing to a register
     reg decoded_mem_read_enable;            // Enable reading from memory
     reg decoded_mem_write_enable;           // Enable writing to memory
-    reg decoded_nzp_write_enable;           // Enable writing to NZP register
     reg [1:0] decoded_reg_input_mux;        // Select input to register
     reg [1:0] decoded_alu_arithmetic_mux;   // Select arithmetic operation
-    reg decoded_alu_output_mux;             // Select operation in ALU
-    reg decoded_pc_mux;                     // Select source of next PC
+    reg decoded_alu_imm_enable;             // Use imm12 as the ALU B operand (ADDI)
+    reg decoded_branch_enable;              // Branch (B-type) instruction
+    reg [2:0] decoded_branch_cond;          // Branch condition (= funct3)
+    reg decoded_jump_enable;                // Jump with link (J-type JAL)
     reg decoded_ret;
 
     // Fetcher
@@ -97,23 +98,23 @@ module core #(
         .decoded_rd_address(decoded_rd_address),
         .decoded_rs_address(decoded_rs_address),
         .decoded_rt_address(decoded_rt_address),
-        .decoded_nzp(decoded_nzp),
         .decoded_immediate(decoded_immediate),
         .decoded_reg_write_enable(decoded_reg_write_enable),
         .decoded_mem_read_enable(decoded_mem_read_enable),
         .decoded_mem_write_enable(decoded_mem_write_enable),
-        .decoded_nzp_write_enable(decoded_nzp_write_enable),
         .decoded_reg_input_mux(decoded_reg_input_mux),
         .decoded_alu_arithmetic_mux(decoded_alu_arithmetic_mux),
-        .decoded_alu_output_mux(decoded_alu_output_mux),
-        .decoded_pc_mux(decoded_pc_mux),
+        .decoded_alu_imm_enable(decoded_alu_imm_enable),
+        .decoded_branch_enable(decoded_branch_enable),
+        .decoded_branch_cond(decoded_branch_cond),
+        .decoded_jump_enable(decoded_jump_enable),
         .decoded_ret(decoded_ret)
     );
 
     // Scheduler
     scheduler #(
         .PROGRAM_MEM_ADDR_BITS(PROGRAM_MEM_ADDR_BITS),
-        .THREADS_PER_BLOCK(THREADS_PER_BLOCK),
+        .THREADS_PER_BLOCK(THREADS_PER_BLOCK)
     ) scheduler_instance (
         .clk(clk),
         .reset(reset),
@@ -142,7 +143,8 @@ module core #(
                 .enable(i < thread_count),
                 .core_state(core_state),
                 .decoded_alu_arithmetic_mux(decoded_alu_arithmetic_mux),
-                .decoded_alu_output_mux(decoded_alu_output_mux),
+                .decoded_alu_imm_enable(decoded_alu_imm_enable),
+                .decoded_immediate(decoded_immediate),
                 .rs(rs[i]),
                 .rt(rt[i]),
                 .alu_out(alu_out[i])
@@ -159,6 +161,7 @@ module core #(
                 .core_state(core_state),
                 .decoded_mem_read_enable(decoded_mem_read_enable),
                 .decoded_mem_write_enable(decoded_mem_write_enable),
+                .decoded_immediate(decoded_immediate),
                 .mem_read_valid(data_mem_read_valid[i]),
                 .mem_read_address(data_mem_read_address[i]),
                 .mem_read_ready(data_mem_read_ready[i]),
@@ -177,7 +180,7 @@ module core #(
             registers #(
                 .THREADS_PER_BLOCK(THREADS_PER_BLOCK),
                 .THREAD_ID(i),
-                .DATA_BITS(DATA_MEM_DATA_BITS),
+                .DATA_BITS(DATA_MEM_DATA_BITS)
             ) register_instance (
                 .clk(clk),
                 .reset(reset),
@@ -189,9 +192,9 @@ module core #(
                 .decoded_rd_address(decoded_rd_address),
                 .decoded_rs_address(decoded_rs_address),
                 .decoded_rt_address(decoded_rt_address),
-                .decoded_immediate(decoded_immediate),
                 .alu_out(alu_out[i]),
                 .lsu_out(lsu_out[i]),
+                .pc_result(pc_result[i]),
                 .rs(rs[i]),
                 .rt(rt[i])
             );
@@ -205,13 +208,15 @@ module core #(
                 .reset(reset),
                 .enable(i < thread_count),
                 .core_state(core_state),
-                .decoded_nzp(decoded_nzp),
+                .decoded_branch_enable(decoded_branch_enable),
+                .decoded_branch_cond(decoded_branch_cond),
+                .decoded_jump_enable(decoded_jump_enable),
                 .decoded_immediate(decoded_immediate),
-                .decoded_nzp_write_enable(decoded_nzp_write_enable),
-                .decoded_pc_mux(decoded_pc_mux),
-                .alu_out(alu_out[i]),
+                .rs(rs[i]),
+                .rt(rt[i]),
                 .current_pc(current_pc),
-                .next_pc(next_pc[i])
+                .next_pc(next_pc[i]),
+                .pc_result(pc_result[i])
             );
         end
     endgenerate

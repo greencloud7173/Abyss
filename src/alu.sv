@@ -6,6 +6,8 @@
 // > In this minimal implementation, the ALU supports the 4 basic arithmetic operations
 // > Each thread in each core has it's own ALU
 // > ADD, SUB, MUL, DIV instructions are all executed here
+// > `decoded_alu_imm_enable` swaps the B operand from rt to the immediate, which is what
+// > makes ADDI (and the `li` / `nop` pseudo-instructions) and LUI work
 module alu #(
     parameter DATA_BITS = 8
 ) (
@@ -16,7 +18,8 @@ module alu #(
     input reg [2:0] core_state,
 
     input reg [1:0] decoded_alu_arithmetic_mux,
-    input reg decoded_alu_output_mux,
+    input reg decoded_alu_imm_enable, // Use the immediate as the B operand (ADDI / LUI)
+    input reg [DATA_BITS-1:0] decoded_immediate,
 
     input reg [DATA_BITS-1:0] rs,
     input reg [DATA_BITS-1:0] rt,
@@ -30,32 +33,42 @@ module alu #(
     reg [DATA_BITS-1:0] alu_out_reg;
     assign alu_out = alu_out_reg;
 
+    // Signed views of the operands, used by DIV (RISC-V `div` is signed).
+    // ADD/SUB/MUL keep using the unsigned operands (identical results for +,-,* modulo 2^32).
+    wire signed [DATA_BITS-1:0] rs_signed, rt_signed;
+    assign rs_signed = rs;
+    assign rt_signed = rt;
+
+    // Immediate: already sign-extended / shifted by the decoder
+    wire signed [DATA_BITS-1:0] imm_signed;
+    assign imm_signed = decoded_immediate;
+
+    // B operand: rs2/rt normally, the immediate for ADDI / LUI
+    wire signed [DATA_BITS-1:0] operand_b;
+    assign operand_b = decoded_alu_imm_enable ? imm_signed : rt_signed;
+
     always @(posedge clk) begin 
         if (reset) begin 
             alu_out_reg <= {DATA_BITS{1'b0}};
         end else if (enable) begin
             // Calculate alu_out when core_state = EXECUTE
             if (core_state == 3'b101) begin 
-                if (decoded_alu_output_mux == 1) begin 
-                    // Set values to compare with NZP register in alu_out[2:0]
-                    alu_out_reg <= {{DATA_BITS-3{1'b0}}, (rs - rt > 0), (rs - rt == 0), (rs - rt < 0)};
-                end else begin 
-                    // Execute the specified arithmetic instruction
-                    case (decoded_alu_arithmetic_mux)
-                        ADD: begin 
-                            alu_out_reg <= rs + rt;
-                        end
-                        SUB: begin 
-                            alu_out_reg <= rs - rt;
-                        end
-                        MUL: begin 
-                            alu_out_reg <= rs * rt;
-                        end
-                        DIV: begin 
-                            alu_out_reg <= rs / rt;
-                        end
-                    endcase
-                end
+                // Execute the specified arithmetic instruction
+                case (decoded_alu_arithmetic_mux)
+                    ADD: begin 
+                        alu_out_reg <= rs + operand_b;
+                    end
+                    SUB: begin 
+                        alu_out_reg <= rs - operand_b;
+                    end
+                    MUL: begin 
+                        alu_out_reg <= rs * operand_b;
+                    end
+                    DIV: begin 
+                        // RISC-V `div`: signed division, truncated toward zero
+                        alu_out_reg <= rs_signed / operand_b;
+                    end
+                endcase
             end
         end
     end

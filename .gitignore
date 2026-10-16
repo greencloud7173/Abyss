@@ -7,3 +7,4 @@ gds/**/*.gltf
 .DS_Store
 results.xml
 vide.toml
+*vivado*/

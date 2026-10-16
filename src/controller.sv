@@ -49,18 +49,18 @@ module controller #(
     always @(posedge clk) begin
         if (reset) begin 
             mem_read_valid <= 0;
-            mem_read_address <= 0;
+            mem_read_address <= '{default: 'h0};
 
             mem_write_valid <= 0;
-            mem_write_address <= 0;
-            mem_write_data <= 0;
+            mem_write_address <= '{default: 'h0};
+            mem_write_data <= '{default: 'h0};
 
             consumer_read_ready <= 0;
-            consumer_read_data <= 0;
+            consumer_read_data <= '{default: 'h0};
             consumer_write_ready <= 0;
 
-            current_consumer <= 0;
-            controller_state <= 0;
+            current_consumer <= '{default: 'h0};
+            controller_state <= '{default: 'h0};
 
             channel_serving_consumer = 0;
         end else begin 

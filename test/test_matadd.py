@@ -9,20 +9,18 @@ from .helpers.logger import logger
 async def test_matadd(dut):
     # Program Memory
     program_memory = Memory(dut=dut, addr_bits=32, data_bits=32, channels=1, name="program")
+    # 注意:x0 (R0) 恒为 0,不能当普通寄存器用(这里用 R13 存全局线程号 i)
+    # 访存用 RISC-V 偏移寻址:mem[rs1 + imm],所以 A/B/C 的基址直接写进立即数
     program = [
-        0b01010000000000000000000011011110, # MUL R0, %blockIdx, %blockDim
-        0b00110000000000000000000000001111, # ADD R0, R0, %threadIdx         ; i = blockIdx * blockDim + threadIdx
-        0b10010000000000000000000100000000, # CONST R1, #0                   ; baseA (matrix A base address)
-        0b10010000000000000000001000001000, # CONST R2, #8                   ; baseB (matrix B base address)
-        0b10010000000000000000001100010000, # CONST R3, #16                  ; baseC (matrix C base address)
-        0b00110000000000000000010000010000, # ADD R4, R1, R0                 ; addr(A[i]) = baseA + i
-        0b01110000000000000000010001000000, # LDR R4, R4                     ; load A[i] from global memory
-        0b00110000000000000000010100100000, # ADD R5, R2, R0                 ; addr(B[i]) = baseB + i
-        0b01110000000000000000010101010000, # LDR R5, R5                     ; load B[i] from global memory
-        0b00110000000000000000011001000101, # ADD R6, R4, R5                 ; C[i] = A[i] + B[i]
-        0b00110000000000000000011100110000, # ADD R7, R3, R0                 ; addr(C[i]) = baseC + i
-        0b10000000000000000000000001110110, # STR R7, R6                     ; store C[i] in global memory
-        0b11110000000000000000000000000000, # RET                            ; end of kernel
+        0b00000011111011101000011010110011, # MUL  R13, %blockIdx, %blockDim
+        0b00000001111101101000011010110011, # ADD  R13, R13, %threadIdx  ; i = blockIdx * blockDim + threadIdx
+        0b00000001000000000000000010010011, # ADDI R1, x0, #16           ; baseC = 16
+        0b00000000110100001000000010110011, # ADD  R1, R1, R13           ; addr(C[i]) = baseC + i
+        0b00000000000001101010001000000011, # LDR  R4, 0(R13)            ; A[i]  (baseA = 0)
+        0b00000000100001101010001010000011, # LDR  R5, 8(R13)            ; B[i]  (baseB = 8)
+        0b00000000010100100000001100110011, # ADD  R6, R4, R5            ; C[i] = A[i] + B[i]
+        0b00000000011000001010000000100011, # STR  R6, 0(R1)             ; store C[i] in global memory
+        0b00000000000000000000000001011011, # RET
     ]
 
     # Data Memory

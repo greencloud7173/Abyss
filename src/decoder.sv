@@ -4,6 +4,18 @@
 // INSTRUCTION DECODER
 // > Decodes an instruction into the control signals necessary to execute it
 // > Each core has it's own decoder
+// > 32-bit instruction layout, RISC-V style (see isa/isa.md):
+// >   R-type: funct7[31:25] | rs2[24:20] | rs1[19:15] | funct3[14:12] | rd[11:7] | opcode[6:0]
+// >   I-type: imm[11:0][31:20]           | rs1[19:15] | funct3[14:12] | rd[11:7] | opcode[6:0]
+// >   S-type: imm[11:5][31:25]| rs2[24:20] | rs1[19:15] | funct3[14:12] | imm[4:0][11:7] | opcode[6:0]
+// >   B-type: imm[12|10:5][31:25] | rs2[24:20] | rs1[19:15] | funct3[14:12] | imm[4:1|11][11:7] | opcode[6:0]
+// >   U-type: imm[31:12]               | rd[11:7] | opcode[6:0]  (LUI / AUIPC)
+// >   J-type: imm[20|10:1|11|19:12]   | rd[11:7] | opcode[6:0]  (JAL)
+// > `rs`/`rt` in this module are RISC-V's rs1/rs2
+// > Immediates are normalized to a full 32-bit value here (I/S/B/J sign-extended, U shifted),
+// > so the ALU, LSU and PC unit consume `decoded_immediate` as-is with no sign logic of their own
+// > Every field is a fixed slice of the instruction, so decoding stays a flat
+// > opcode case (+ funct3/funct7 cases for the R-type group) and no extra muxes are needed
 module decoder (
     input wire clk,
     input wire reset,
@@ -12,36 +24,54 @@ module decoder (
     input reg [31:0] instruction,
     
     // Instruction Signals
-    output reg [3:0] decoded_rd_address,
-    output reg [3:0] decoded_rs_address,
-    output reg [3:0] decoded_rt_address,
-    output reg [2:0] decoded_nzp,
-    output reg [7:0] decoded_immediate,
+    output reg [4:0] decoded_rd_address,
+    output reg [4:0] decoded_rs_address,
+    output reg [4:0] decoded_rt_address,
+    output reg [31:0] decoded_immediate,
     
     // Control Signals
     output reg decoded_reg_write_enable,           // Enable writing to a register
     output reg decoded_mem_read_enable,            // Enable reading from memory
     output reg decoded_mem_write_enable,           // Enable writing to memory
-    output reg decoded_nzp_write_enable,           // Enable writing to NZP register
     output reg [1:0] decoded_reg_input_mux,        // Select input to register
     output reg [1:0] decoded_alu_arithmetic_mux,   // Select arithmetic operation
-    output reg decoded_alu_output_mux,             // Select operation in ALU
-    output reg decoded_pc_mux,                     // Select source of next PC
+    output reg decoded_alu_imm_enable,             // Use the immediate as the ALU B operand (ADDI / LUI)
+    output reg decoded_branch_enable,              // Branch (B-type) instruction
+    output reg [2:0] decoded_branch_cond,          // Branch condition (= funct3)
+    output reg decoded_jump_enable,                // Jump with link (J-type JAL)
 
     // Return (finished executing thread)
     output reg decoded_ret
 );
-    localparam NOP = 4'b0000,
-        BRnzp = 4'b0001,
-        CMP = 4'b0010,
-        ADD = 4'b0011,
-        SUB = 4'b0100,
-        MUL = 4'b0101,
-        DIV = 4'b0110,
-        LDR = 4'b0111,
-        STR = 4'b1000,
-        CONST = 4'b1001,
-        RET = 4'b1111;
+    // Opcodes (instruction[6:0]); like RISC-V's 32-bit instructions, the low two bits are `11`
+    localparam OP = 7'b0110011,      // RISC-V OP:     ADD / SUB / MUL / DIV
+        OP_IMM = 7'b0010011,         // RISC-V OP-IMM: ADDI (`li rd, imm` when rs1 = x0)
+        LOAD = 7'b0000011,           // RISC-V LOAD:   LDR (= `lw rd, imm(rs1)`)
+        STORE = 7'b0100011,          // RISC-V STORE:  STR (= `sw rs2, imm(rs1)`)
+        BRANCH = 7'b1100011,         // RISC-V BRANCH: BEQ / BNE / BLT / BGE / BLTU / BGEU
+        JAL = 7'b1101111,            // RISC-V JAL:    jump and link (PC relative)
+        LUI = 7'b0110111,            // RISC-V LUI:    load upper immediate (imm[31:12])
+        AUIPC = 7'b0010111,          // RISC-V AUIPC:  add upper immediate to PC
+        CUSTOM2 = 7'b1011011;        // custom-2:      RET (thread finished executing)
+
+    // funct3 fields
+    localparam F3_ADD_SUB_MUL = 3'b000, // OP: add / sub / mul; OP-IMM: addi
+        F3_DIV = 3'b100,                // OP: div
+        F3_LW = 3'b010,                 // LOAD: lw
+        F3_SW = 3'b010;                 // STORE: sw
+
+    // Branch conditions (BRANCH funct3, same values as RISC-V)
+    localparam BEQ = 3'b000,
+        BNE = 3'b001,
+        BLT = 3'b100,
+        BGE = 3'b101,
+        BLTU = 3'b110,
+        BGEU = 3'b111;
+
+    // funct7 fields
+    localparam F7_ADD = 7'b0000000,
+        F7_SUB = 7'b0100000,
+        F7_MULDIV = 7'b0000001;
 
     always @(posedge clk) begin 
         if (reset) begin 
@@ -49,82 +79,138 @@ module decoder (
             decoded_rs_address <= 0;
             decoded_rt_address <= 0;
             decoded_immediate <= 0;
-            decoded_nzp <= 0;
             decoded_reg_write_enable <= 0;
             decoded_mem_read_enable <= 0;
             decoded_mem_write_enable <= 0;
-            decoded_nzp_write_enable <= 0;
             decoded_reg_input_mux <= 0;
             decoded_alu_arithmetic_mux <= 0;
-            decoded_alu_output_mux <= 0;
-            decoded_pc_mux <= 0;
+            decoded_alu_imm_enable <= 0;
+            decoded_branch_enable <= 0;
+            decoded_branch_cond <= 0;
+            decoded_jump_enable <= 0;
             decoded_ret <= 0;
         end else begin 
             // Decode when core_state = DECODE
             if (core_state == 3'b010) begin 
-                // Get instruction signals from instruction every time
-                decoded_rd_address <= instruction[11:8];
-                decoded_rs_address <= instruction[7:4];
-                decoded_rt_address <= instruction[3:0];
-                decoded_immediate <= instruction[7:0];
-                decoded_nzp <= instruction[11:9];
+                // Get instruction signals from instruction every time (RISC-V field positions).
+                // Default immediate = I-type imm12, sign-extended to a full 32-bit value;
+                // S/B/U/J types override the assembly below.
+                decoded_rd_address <= instruction[11:7];
+                decoded_rs_address <= instruction[19:15];
+                decoded_rt_address <= instruction[24:20];
+                decoded_immediate <= {{20{instruction[31]}}, instruction[31:20]};
 
                 // Control signals reset on every decode and set conditionally by instruction
                 decoded_reg_write_enable <= 0;
                 decoded_mem_read_enable <= 0;
                 decoded_mem_write_enable <= 0;
-                decoded_nzp_write_enable <= 0;
                 decoded_reg_input_mux <= 0;
                 decoded_alu_arithmetic_mux <= 0;
-                decoded_alu_output_mux <= 0;
-                decoded_pc_mux <= 0;
+                decoded_alu_imm_enable <= 0;
+                decoded_branch_enable <= 0;
+                decoded_branch_cond <= 0;
+                decoded_jump_enable <= 0;
                 decoded_ret <= 0;
 
-                // Set the control signals for each instruction
-                case (instruction[31:28])
-                    NOP: begin 
-                        // no-op
+                // Set the control signals for each instruction (RISC-V style dispatch)
+                case (instruction[6:0])
+                    OP: begin
+                        // Register-register arithmetic, selected by funct3 (+ funct7)
+                        case (instruction[14:12])
+                            F3_ADD_SUB_MUL: begin
+                                case (instruction[31:25])
+                                    F7_ADD: begin 
+                                        decoded_reg_write_enable <= 1;
+                                        decoded_reg_input_mux <= 2'b00;
+                                        decoded_alu_arithmetic_mux <= 2'b00;
+                                    end
+                                    F7_SUB: begin 
+                                        decoded_reg_write_enable <= 1;
+                                        decoded_reg_input_mux <= 2'b00;
+                                        decoded_alu_arithmetic_mux <= 2'b01;
+                                    end
+                                    F7_MULDIV: begin 
+                                        decoded_reg_write_enable <= 1;
+                                        decoded_reg_input_mux <= 2'b00;
+                                        decoded_alu_arithmetic_mux <= 2'b10;
+                                    end
+                                endcase
+                            end
+                            F3_DIV: begin
+                                if (instruction[31:25] == F7_MULDIV) begin 
+                                    decoded_reg_write_enable <= 1;
+                                    decoded_reg_input_mux <= 2'b00;
+                                    decoded_alu_arithmetic_mux <= 2'b11;
+                                end
+                            end
+                        endcase
                     end
-                    BRnzp: begin 
-                        decoded_pc_mux <= 1;
+                    OP_IMM: begin 
+                        // ADDI rd, rs1, imm12 (this is `li rd, imm` when rs1 = x0,
+                        // and `nop` when rd = rs1 = x0 and imm = 0)
+                        if (instruction[14:12] == F3_ADD_SUB_MUL) begin 
+                            decoded_reg_write_enable <= 1;
+                            decoded_reg_input_mux <= 2'b00;     // write back ALU result
+                            decoded_alu_arithmetic_mux <= 2'b00; // ADD
+                            decoded_alu_imm_enable <= 1;        // B operand = imm12
+                        end
                     end
-                    CMP: begin 
-                        decoded_alu_output_mux <= 1;
-                        decoded_nzp_write_enable <= 1;
+                    LOAD: begin 
+                        // LDR: `lw rd, imm(rs1)` (I-type, imm12 already sliced)
+                        if (instruction[14:12] == F3_LW) begin 
+                            decoded_reg_write_enable <= 1;
+                            decoded_reg_input_mux <= 2'b01;
+                            decoded_mem_read_enable <= 1;
+                        end
                     end
-                    ADD: begin 
+                    STORE: begin 
+                        // STR: `sw rs2, imm(rs1)` - S-type, so the 12-bit offset is split
+                        // across instruction[31:25] and instruction[11:7]
+                        decoded_immediate <= {{20{instruction[31]}}, instruction[31:25], instruction[11:7]};
+                        if (instruction[14:12] == F3_SW) begin 
+                            decoded_mem_write_enable <= 1;
+                        end
+                    end
+                    BRANCH: begin 
+                        // B-type conditional branch: `Bcc rs1, rs2, offset`
+                        // imm[12]=inst[31], imm[11]=inst[7], imm[10:5]=inst[30:25],
+                        // imm[4:1]=inst[11:8], imm[0]=0 (signed byte offset)
+                        decoded_immediate <= {{19{instruction[31]}}, instruction[31], instruction[7], instruction[30:25], instruction[11:8], 1'b0};
+                        if (instruction[14:12] == BEQ || instruction[14:12] == BNE ||
+                            instruction[14:12] == BLT || instruction[14:12] == BGE ||
+                            instruction[14:12] == BLTU || instruction[14:12] == BGEU) begin 
+                            decoded_branch_enable <= 1;
+                            decoded_branch_cond <= instruction[14:12];
+                        end
+                    end
+                    JAL: begin 
+                        // JAL rd, offset: rd = PC + 4, PC = PC + offset
+                        // (J-type: imm[20]=inst[31], imm[10:1]=inst[30:21], imm[11]=inst[20],
+                        //  imm[19:12]=inst[19:12], imm[0]=0 - signed byte offset)
+                        decoded_immediate <= {{11{instruction[31]}}, instruction[31], instruction[19:12], instruction[20], instruction[30:21], 1'b0};
+                        decoded_reg_write_enable <= 1;
+                        decoded_reg_input_mux <= 2'b10; // link value comes from the PC unit
+                        decoded_jump_enable <= 1;       // unconditional PC-relative jump
+                    end
+                    LUI: begin 
+                        // LUI rd, imm20: rd = imm20 << 12 (upper 20 bits)
+                        // Executed as ADD with the A operand forced to x0 (= 0), so no extra
+                        // ALU operation or mux is needed
+                        decoded_rs_address <= 5'd0;
+                        decoded_immediate <= {instruction[31:12], 12'b0}; // not sign-extended
                         decoded_reg_write_enable <= 1;
                         decoded_reg_input_mux <= 2'b00;
-                        decoded_alu_arithmetic_mux <= 2'b00;
+                        decoded_alu_arithmetic_mux <= 2'b00; // ADD
+                        decoded_alu_imm_enable <= 1;
                     end
-                    SUB: begin 
+                    AUIPC: begin 
+                        // AUIPC rd, imm20: rd = PC + (imm20 << 12) (PC-relative address)
+                        decoded_immediate <= {instruction[31:12], 12'b0}; // not sign-extended
                         decoded_reg_write_enable <= 1;
-                        decoded_reg_input_mux <= 2'b00;
-                        decoded_alu_arithmetic_mux <= 2'b01;
+                        decoded_reg_input_mux <= 2'b10; // value comes from the PC unit
                     end
-                    MUL: begin 
-                        decoded_reg_write_enable <= 1;
-                        decoded_reg_input_mux <= 2'b00;
-                        decoded_alu_arithmetic_mux <= 2'b10;
-                    end
-                    DIV: begin 
-                        decoded_reg_write_enable <= 1;
-                        decoded_reg_input_mux <= 2'b00;
-                        decoded_alu_arithmetic_mux <= 2'b11;
-                    end
-                    LDR: begin 
-                        decoded_reg_write_enable <= 1;
-                        decoded_reg_input_mux <= 2'b01;
-                        decoded_mem_read_enable <= 1;
-                    end
-                    STR: begin 
-                        decoded_mem_write_enable <= 1;
-                    end
-                    CONST: begin 
-                        decoded_reg_write_enable <= 1;
-                        decoded_reg_input_mux <= 2'b10;
-                    end
-                    RET: begin 
+                    CUSTOM2: begin 
+                        // RET
                         decoded_ret <= 1;
                     end
                 endcase

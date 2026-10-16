@@ -5,6 +5,7 @@
 // > Handles asynchronous memory load and store operations and waits for response
 // > Each thread in each core has it's own LSU
 // > LDR, STR instructions are executed here
+// > Address is RISC-V style `imm(rs1)`: rs1 + the (already sign-extended) immediate
 module lsu #(
     parameter ADDR_BITS = 8,
     parameter DATA_BITS = 8
@@ -19,6 +20,9 @@ module lsu #(
     // Memory Control Sgiansl
     input reg decoded_mem_read_enable,
     input reg decoded_mem_write_enable,
+
+    // Instruction Signals
+    input reg [DATA_BITS-1:0] decoded_immediate,
 
     // Registers
     input reg [DATA_BITS-1:0] rs,
@@ -39,6 +43,13 @@ module lsu #(
     output reg [DATA_BITS-1:0] lsu_out
 );
     localparam IDLE = 2'b00, REQUESTING = 2'b01, WAITING = 2'b10, DONE = 2'b11;
+
+    // Effective address: rs1 + the (already sign-extended) immediate
+    wire signed [DATA_BITS-1:0] imm_signed;
+    assign imm_signed = decoded_immediate;
+
+    wire [ADDR_BITS-1:0] effective_address;
+    assign effective_address = rs + imm_signed;
 
     always @(posedge clk) begin
         if (reset) begin
@@ -61,7 +72,7 @@ module lsu #(
                     end
                     REQUESTING: begin 
                         mem_read_valid <= 1;
-                        mem_read_address <= rs;
+                        mem_read_address <= effective_address;
                         lsu_state <= WAITING;
                     end
                     WAITING: begin
@@ -91,7 +102,7 @@ module lsu #(
                     end
                     REQUESTING: begin 
                         mem_write_valid <= 1;
-                        mem_write_address <= rs;
+                        mem_write_address <= effective_address;
                         mem_write_data <= rt;
                         lsu_state <= WAITING;
                     end
