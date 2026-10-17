@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Simplified Clang toolchain for the Abyss ISA.
+#
+# clang (RISC-V frontend/codegen) -> riscv2abyss.py -> llvm-mc
+#
+# Usage:
+#   abysscc [--start START.s] [--keep] input.c -o output.o
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLANG="${CLANG:-clang}"
+LLVM_MC="${LLVM_MC:-/home/greencloud7173/llvm-project/build/bin/llvm-mc}"
+LLVM_OBJCOPY="${LLVM_OBJCOPY:-/home/greencloud7173/llvm-project/build/bin/llvm-objcopy}"
+
+START=""
+KEEP=0
+RAW=0
+INPUT=""
+OUTPUT=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --start) START="$2"; shift 2 ;;
+    --keep) KEEP=1; shift ;;
+    --raw) RAW=1; shift ;;
+    -o) OUTPUT="$2"; shift 2 ;;
+    -h|--help)
+      echo "usage: $0 [--start START.s] [--keep] [--raw] input.c -o output.o"
+      exit 0 ;;
+    *) INPUT="$1"; shift ;;
+  esac
+done
+
+if [[ -z "$INPUT" || -z "$OUTPUT" ]]; then
+  echo "usage: $0 [--start START.s] [--keep] [--raw] input.c -o output.o" >&2
+  exit 1
+fi
+
+BASE="${OUTPUT%.*}"
+RISCV_S="$BASE.riscv.s"
+KERNEL_S="$BASE.kernel.abyss.s"
+ABYSS_S="$BASE.abyss.s"
+
+"$CLANG" --target=riscv32-unknown-elf -march=rv32im -mabi=ilp32 -O2 \
+  -ffixed-x23 -ffixed-x24 -ffixed-x25 -ffixed-x26 -ffixed-x27 \
+  -ffixed-x28 -ffixed-x29 -ffixed-x30 -ffixed-x31 \
+  -fno-pic -fno-delete-null-pointer-checks -nostdlib \
+  -I"$SCRIPT_DIR" -S "$INPUT" -o "$RISCV_S"
+
+python3 "$SCRIPT_DIR/riscv2abyss.py" "$RISCV_S" "$KERNEL_S"
+
+if [[ -n "$START" ]]; then
+  cat "$START" "$KERNEL_S" > "$ABYSS_S"
+else
+  cat "$KERNEL_S" > "$ABYSS_S"
+fi
+
+"$LLVM_MC" -arch=abyss -filetype=obj "$ABYSS_S" -o "$OUTPUT"
+
+if [[ "$KEEP" -eq 0 ]]; then
+  rm -f "$RISCV_S" "$KERNEL_S" "$ABYSS_S"
+fi
+
+echo "wrote $OUTPUT"
+
+if [[ "$RAW" -eq 1 ]]; then
+  RAW_OUT="${OUTPUT%.*}.bin"
+  "$LLVM_OBJCOPY" -O binary --only-section=.text "$OUTPUT" "$RAW_OUT"
+  echo "wrote $RAW_OUT (flat Abyss .text, little-endian words)"
+fi

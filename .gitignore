@@ -1,5 +1,7 @@
 */**/__pycache__
 build/
+# Per-test-case artifacts live in test/<case>/build/.
+test/*/build/
 test/logs/*
 !.gitkeep
 gds/**/*.gltf
