@@ -65,7 +65,7 @@ module core #(
     reg decoded_mem_read_enable;            // Enable reading from memory
     reg decoded_mem_write_enable;           // Enable writing to memory
     reg [1:0] decoded_reg_input_mux;        // Select input to register
-    reg [1:0] decoded_alu_arithmetic_mux;   // Select arithmetic operation
+    reg [2:0] decoded_alu_arithmetic_mux;   // Select arithmetic operation
     reg decoded_alu_imm_enable;             // Use imm12 as the ALU B operand (ADDI)
     reg decoded_branch_enable;              // Branch (B-type) instruction
     reg [2:0] decoded_branch_cond;          // Branch condition (= funct3)

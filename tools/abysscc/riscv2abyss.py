@@ -209,19 +209,17 @@ def translate(text):
             out.append("ADDI R24, x0, #1")
             out.append(f"{lab}:")
             out.append(f"ADDI {rd}, R24, #0")
-        elif mnem == "slli":
+        elif mnem in ("slli", "srli", "srai"):
             rd, rs1 = reg(ops[0]), reg(ops[1])
             sh = parse_imm(ops[2])
-            if sh == 0:
-                out.append(f"ADDI {rd}, {rs1}, #0")
-            elif sh == 1:
-                out.append(f"MUL {rd}, {rs1}, R27")
-            elif sh == 2:
-                out.append(f"MUL {rd}, {rs1}, R28")
-            elif sh == 3:
-                out.append(f"MUL {rd}, {rs1}, R23")
-            else:
-                raise ValueError("slli by more than 3 is not supported")
+            if not 0 <= sh < 32:
+                raise ValueError(f"{mnem}: shift amount must be 0..31, got {sh}")
+            # Abyss shift-immediates take the raw shamt (no '#'):
+            #   SLLI/SRLI/SRAI rd, rs1, shamt
+            out.append(f"{mnem.upper()} {rd}, {rs1}, {sh}")
+        elif mnem in ("sll", "srl", "sra"):
+            rd, rs1, rs2 = (reg(x) for x in ops[:3])
+            out.append(f"{mnem.upper()} {rd}, {rs1}, {rs2}")
         elif mnem == "andi" and len(ops) == 3 and reg(ops[0]) == "R2" and \
                 parse_imm(ops[2]) == -16:
             # SP starts 16-byte aligned and frame sizes are multiples of 16.

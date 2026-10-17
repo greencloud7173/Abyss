@@ -4,10 +4,10 @@
 /*
  * Abyss C runtime header for the simplified clang toolchain.
  *
- * The compiler is invoked with -ffixed-x23..x31, so x23/x24/x25/x26 are
- * available to the assembly translator as scratch registers, and x27/x28
- * hold the constants 2 and 4 (used to lower constant shifts), while
- * x29/x30/x31 are the hardware blockIdx/blockDim/threadIdx registers.
+ * The compiler is invoked with -ffixed-x23..x31, so the C compiler never
+ * allocates those registers.  The assembly translator uses R24/R25 for
+ * slt/slti and R26 for rem; R29/R30/R31 are the hardware
+ * blockIdx/blockDim/threadIdx registers.
  */
 
 static inline int __abyss_block_idx(void) {

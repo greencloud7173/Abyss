@@ -7,7 +7,9 @@
 // > Each thread in each core has it's own ALU
 // > ADD, SUB, MUL, DIV instructions are all executed here
 // > `decoded_alu_imm_enable` swaps the B operand from rt to the immediate, which is what
-// > makes ADDI (and the `li` / `nop` pseudo-instructions) and LUI work
+// > makes ADDI (and the `li` / `nop` pseudo-instructions), LUI and the shift-immediates work
+// > Shifts (`SLL`/`SRL`/`SRA`) use `operand_b[4:0]` as the amount, exactly like RISC-V:
+// > the register form takes `rs2[4:0]`, the immediate form takes `imm[4:0]` (so 64 shifts by 1)
 module alu #(
     parameter DATA_BITS = 8
 ) (
@@ -17,7 +19,7 @@ module alu #(
 
     input reg [2:0] core_state,
 
-    input reg [1:0] decoded_alu_arithmetic_mux,
+    input reg [2:0] decoded_alu_arithmetic_mux,
     input reg decoded_alu_imm_enable, // Use the immediate as the B operand (ADDI / LUI)
     input reg [DATA_BITS-1:0] decoded_immediate,
 
@@ -25,10 +27,13 @@ module alu #(
     input reg [DATA_BITS-1:0] rt,
     output wire [DATA_BITS-1:0] alu_out
 );
-    localparam ADD = 2'b00,
-        SUB = 2'b01,
-        MUL = 2'b10,
-        DIV = 2'b11;
+    localparam ADD = 3'b000,
+        SUB = 3'b001,
+        MUL = 3'b010,
+        DIV = 3'b011,
+        SLL = 3'b100,
+        SRL = 3'b101,
+        SRA = 3'b110;
 
     reg [DATA_BITS-1:0] alu_out_reg;
     assign alu_out = alu_out_reg;
@@ -67,6 +72,18 @@ module alu #(
                     DIV: begin 
                         // RISC-V `div`: signed division, truncated toward zero
                         alu_out_reg <= rs_signed / operand_b;
+                    end
+                    SLL: begin 
+                        // Logical shift left, amount = low 5 bits of the B operand
+                        alu_out_reg <= rs << operand_b[4:0];
+                    end
+                    SRL: begin 
+                        // Logical shift right
+                        alu_out_reg <= rs >> operand_b[4:0];
+                    end
+                    SRA: begin 
+                        // Arithmetic shift right (sign-extending)
+                        alu_out_reg <= rs_signed >>> operand_b[4:0];
                     end
                 endcase
             end

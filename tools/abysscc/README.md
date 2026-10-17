@@ -36,6 +36,9 @@ cd /home/greencloud7173/tiny-gpu/tools/abysscc
 # 2x2 矩阵乘法：4 个线程，1 个 block
 ./abysscc --start start_matmul.s examples/matmul.c -o /tmp/matmul.o
 
+# 位移测试（SLL/SRL/SRA/SLLI/SRLI/SRAI）
+./abysscc --start ../../test/shift/src/start.s --raw ../../test/shift/src/shift.c -o /tmp/shift.o
+
 # 加 --keep 保留中间汇编：
 ./abysscc --start start_vecadd.s --keep examples/vecadd.c -o /tmp/vecadd.o
 # 生成 /tmp/vecadd.riscv.s、/tmp/vecadd.kernel.abyss.s、/tmp/vecadd.abyss.s
@@ -48,10 +51,9 @@ cd /home/greencloud7173/tiny-gpu/tools/abysscc
 `--start` 指定启动 stub。stub 负责：
 
 1. 设置 `sp`（示例用字地址 `0x1000`）；
-2. 设置翻译器用的常量寄存器 `R23=8`、`R27=2`、`R28=4`（常量移位用）；
-3. 可选地设置内核参数（如 matmul 的 `N=2` 放在 `a0`/`R10`）；
-4. `JAL R1, kernel` 调用 C 内核；
-5. `RET` 结束该 block。
+2. 可选地设置内核参数（如 matmul 的 `N=2` 放在 `a0`/`R10`）；
+3. `JAL R1, kernel` 调用 C 内核；
+4. `RET` 结束该 block。
 
 内核的 `ret` 会通过 `JALR x0, 0(R1)` 返回到 stub 的 `RET`。
 
@@ -62,8 +64,10 @@ cd /home/greencloud7173/tiny-gpu/tools/abysscc
 ```bash
 python3 run_abyss.py /tmp/vecadd.o --test vecadd
 python3 run_abyss.py /tmp/matmul.o --test matmul
+python3 run_abyss.py /tmp/shift.o --test shift
 # vecadd: got [0, 2, 4, ...], want [...], OK
 # matmul: got [7, 10, 15, 22], want [...], OK
+# shift: 六种移位形式全部匹配
 ```
 
 真实硬件模型（cocotb + iverilog）：
@@ -72,12 +76,13 @@ python3 run_abyss.py /tmp/matmul.o --test matmul
 cd /home/greencloud7173/tiny-gpu
 make test matadd
 make test matmul
-# 等价写法：make test_matadd / make test_matmul
+make test shift
+# 等价写法：make test_matadd / make test_matmul / make test_shift
 ```
 
 测试会自动把 `test/<case>/src/<case>.c` 编译成
 `test/<case>/build/<case>.bin`，Python 入口只提供数据内存参数和二进制名，
-由 `test/helpers/program.py` 负责加载和运行。两个用例均通过。
+由 `test/helpers/program.py` 负责加载和运行。三个用例均通过。
 
 ## 文件说明
 
@@ -88,8 +93,8 @@ make test matmul
 | `abyss.h` | `blockIdx/blockDim/threadIdx` 访问和字地址 `ABYSS_LD/ST` 宏 |
 | `start_vecadd.s` / `start_matmul.s` | 示例启动 stub |
 | `examples/vecadd.c` / `examples/matmul.c` | 示例 C 内核 |
-| `run_abyss.py` | 17 条指令的 Abyss 功能模拟器 |
-| `../../test/matadd/src/` / `../../test/matmul/src/` | cocotb 测试用的 C 源码和启动 stub |
+| `run_abyss.py` | Abyss 功能模拟器（含位移指令） |
+| `../../test/matadd/src/` / `../../test/matmul/src/` / `../../test/shift/src/` | cocotb 测试用的 C 源码和启动 stub |
 
 ## C 语言子集与限制
 
@@ -104,7 +109,8 @@ make test matmul
   ABYSS_ST(16, i, ABYSS_LD(0, i) + ABYSS_LD(8, i));
   ```
 - 只使用 `int`（32 位）。不要用 `char`/`short`/`long long`/浮点。
-- 不要用位运算 `& | ^`，不要用大于 3 的常量移位。
+- 不要用位运算 `& | ^`。移位已支持：`<<`/`>>` 由 clang 按 C 类型选择
+  `SLL/SRL/SRA` 或 `SLLI/SRLI/SRAI`；移位量取低 5 位（mod 32）。
 - 不要用无符号除法/取余（`unsigned` 的 `/`、`%`）；ISA 只有有符号 `DIV`。
 - 不支持全局变量、`la`、PIC、VLAs、可变参数、`libc`。数据由测试 harness 预先
   放在约定的字地址。
@@ -117,14 +123,13 @@ make test matmul
 
 - `+ - * /`（有符号）、比较、`if`、`for`/`while`、函数调用/返回
 - `ADDI`、`LDR`/`STR`（字）、六种分支、`LUI`/`AUIPC`、`JAL`/`JALR`、`RET`
-- 常量移位 0/1/2/3（分别用 `ADDI`、`MUL` ×2、×4、×8 展开）
+- `SLL/SRL/SRA`（变量移位）和 `SLLI/SRLI/SRAI`（常量移位），移位量 mod 32
 - `slt`/`sltu`/`slti`/`sltiu` 展开为比较+分支
 - `rem` 展开为 `DIV` + `MUL` + `SUB`
 
 ### 不支持（会明确报错）
 
 - `andi/ori/xori/and/or/xor`（`andi sp, sp, -16` 作为对齐 no-op 被丢弃）
-- `srli/srai/sll/srl/sra` 及大于 3 的 `slli`
 - `divu/remu`
 - `lh/lhu/sh/lb/lbu/sb`（无字节/半字访存）
 - 浮点、64 位、原子、压缩指令等
@@ -139,10 +144,9 @@ make test matmul
 | `R1` (`ra`) | 返回地址 |
 | `R2` (`sp`) | 栈指针（字地址） |
 | `R10-R17` (`a0-a7`) | 参数/返回值 |
-| `R23` | 翻译器常量 8（`slli 3`） |
 | `R24`/`R25` | `slt`/`slti` 展开临时寄存器 |
 | `R26` | `rem` 展开临时寄存器 |
-| `R27`/`R28` | 常量 2 / 4（`slli 1/2`） |
+| `R23`/`R27`/`R28` | 保留（当前翻译器未使用） |
 | `R29`/`R30`/`R31` | `%blockIdx` / `%blockDim` / `%threadIdx`（只读） |
 
 `abyss.h` 用内联汇编读取 `x29/x30/x31`，效果等同于 Clang builtin；这是简化路线，

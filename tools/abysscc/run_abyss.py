@@ -2,8 +2,8 @@
 """Small functional simulator for the Abyss ISA.
 
 Used to sanity-check programs produced by abysscc without running Verilator.
-It implements the 17 instructions of the tiny-gpu ISA and the word-addressed
-data memory model.
+It implements the Abyss instructions used by the tests, including the
+SLL/SRL/SRA and SLLI/SRLI/SRAI shifts, and the word-addressed data memory model.
 """
 
 import argparse
@@ -23,6 +23,10 @@ def sext(value, bits):
 def i32(value):
     value &= 0xFFFFFFFF
     return value - 0x100000000 if value & 0x80000000 else value
+
+
+def u32(value):
+    return value & 0xFFFFFFFF
 
 
 def sdiv(a, b):
@@ -68,11 +72,27 @@ class Cpu:
                     self.wr(rd, self.r[rs1] * self.r[rs2])
                 elif funct3 == 4 and funct7 == 1:
                     self.wr(rd, sdiv(self.r[rs1], self.r[rs2]))
+                elif funct3 == 1 and funct7 == 0:
+                    self.wr(rd, self.r[rs1] << (self.r[rs2] & 31))
+                elif funct3 == 5 and funct7 == 0:
+                    self.wr(rd, (self.r[rs1] & 0xFFFFFFFF) >> (self.r[rs2] & 31))
+                elif funct3 == 5 and funct7 == 0x20:
+                    self.wr(rd, i32(self.r[rs1]) >> (self.r[rs2] & 31))
                 else:
                     raise RuntimeError(f"unsupported R-type {w:08x}")
                 self.pc += 1
-            elif opcode == 0x13 and funct3 == 0:
-                self.wr(rd, self.r[rs1] + imm_i)
+            elif opcode == 0x13:
+                shamt = (w >> 20) & 0x1F
+                if funct3 == 0:
+                    self.wr(rd, self.r[rs1] + imm_i)
+                elif funct3 == 1 and funct7 == 0:
+                    self.wr(rd, self.r[rs1] << shamt)
+                elif funct3 == 5 and funct7 == 0:
+                    self.wr(rd, (self.r[rs1] & 0xFFFFFFFF) >> shamt)
+                elif funct3 == 5 and funct7 == 0x20:
+                    self.wr(rd, i32(self.r[rs1]) >> shamt)
+                else:
+                    raise RuntimeError(f"unsupported I-type {w:08x}")
                 self.pc += 1
             elif opcode == 0x03 and funct3 == 2:
                 addr = self.r[rs1] + imm_i
@@ -82,7 +102,7 @@ class Cpu:
                 imm = (((w >> 25) & 0x7F) << 5) | ((w >> 7) & 0x1F)
                 imm = sext(imm, 12)
                 addr = self.r[rs1] + imm
-                self.mem[addr] = self.r[rs2]
+                self.mem[addr] = self.r[rs2] & 0xFFFFFFFF
                 self.pc += 1
             elif opcode == 0x63:
                 imm = (((w >> 31) & 1) << 12) | (((w >> 25) & 0x3F) << 5) | \
@@ -139,7 +159,7 @@ def load_text(obj):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("obj")
-    ap.add_argument("--test", choices=["vecadd", "matmul"], required=True)
+    ap.add_argument("--test", choices=["vecadd", "matmul", "shift"], required=True)
     args = ap.parse_args()
 
     program = load_text(args.obj)
@@ -153,13 +173,29 @@ def main():
                 Cpu(program, mem, blk, 4, tid).run()
         got = [mem.get(16 + i, 0) for i in range(8)]
         want = [2 * i for i in range(8)]
-    else:
+    elif args.test == "matmul":
         for i, v in enumerate([1, 2, 3, 4] + [1, 2, 3, 4]):
             mem[i] = v
         for tid in range(4):
             Cpu(program, mem, 0, 4, tid).run()
         got = [mem.get(8 + i, 0) for i in range(4)]
         want = [7, 10, 15, 22]
+    else:  # shift
+        data = [1, 0xFFFFFFF8, 0x7FFFFFFF, 0x80000000, 1, 2, 3, 4]
+        for i, v in enumerate(data):
+            mem[i] = v
+        for tid in range(4):
+            Cpu(program, mem, 0, 4, tid).run()
+        a = data[0:4]
+        sh = data[4:8]
+        want = []
+        want += [u32(v << 2) for v in a]
+        want += [u32(i32(v) >> 1) for v in a]
+        want += [u32(v) >> 1 for v in a]
+        want += [u32(v << (n & 31)) for v, n in zip(a, sh)]
+        want += [u32(i32(v) >> (n & 31)) for v, n in zip(a, sh)]
+        want += [u32(v) >> (n & 31) for v, n in zip(a, sh)]
+        got = [mem.get(8 + i, 0) for i in range(24)]
 
     print(f"{args.test}: got {got}, want {want}, {'OK' if got == want else 'FAIL'}")
     return 0 if got == want else 1

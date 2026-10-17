@@ -34,7 +34,7 @@ module decoder (
     output reg decoded_mem_read_enable,            // Enable reading from memory
     output reg decoded_mem_write_enable,           // Enable writing to memory
     output reg [1:0] decoded_reg_input_mux,        // Select input to register
-    output reg [1:0] decoded_alu_arithmetic_mux,   // Select arithmetic operation
+    output reg [2:0] decoded_alu_arithmetic_mux,   // Select arithmetic operation
     output reg decoded_alu_imm_enable,             // Use the immediate as the ALU B operand (ADDI / LUI)
     output reg decoded_branch_enable,              // Branch (B-type) instruction
     output reg [2:0] decoded_branch_cond,          // Branch condition (= funct3)
@@ -57,7 +57,9 @@ module decoder (
 
     // funct3 fields
     localparam F3_ADD_SUB_MUL = 3'b000, // OP: add / sub / mul; OP-IMM: addi
+        F3_SLL = 3'b001,                // OP: sll;   OP-IMM: slli
         F3_DIV = 3'b100,                // OP: div
+        F3_SRL_SRA = 3'b101,            // OP: srl / sra; OP-IMM: srli / srai
         F3_LW = 3'b010,                 // LOAD: lw
         F3_SW = 3'b010;                 // STORE: sw
 
@@ -73,6 +75,15 @@ module decoder (
     localparam F7_ADD = 7'b0000000,
         F7_SUB = 7'b0100000,
         F7_MULDIV = 7'b0000001;
+
+    // ALU operation encodings (must match src/alu.sv)
+    localparam ALU_ADD = 3'b000,
+        ALU_SUB = 3'b001,
+        ALU_MUL = 3'b010,
+        ALU_DIV = 3'b011,
+        ALU_SLL = 3'b100,
+        ALU_SRL = 3'b101,
+        ALU_SRA = 3'b110;
 
     always @(posedge clk) begin 
         if (reset) begin 
@@ -125,38 +136,84 @@ module decoder (
                                     F7_ADD: begin 
                                         decoded_reg_write_enable <= 1;
                                         decoded_reg_input_mux <= 2'b00;
-                                        decoded_alu_arithmetic_mux <= 2'b00;
+                                        decoded_alu_arithmetic_mux <= ALU_ADD;
                                     end
                                     F7_SUB: begin 
                                         decoded_reg_write_enable <= 1;
                                         decoded_reg_input_mux <= 2'b00;
-                                        decoded_alu_arithmetic_mux <= 2'b01;
+                                        decoded_alu_arithmetic_mux <= ALU_SUB;
                                     end
                                     F7_MULDIV: begin 
                                         decoded_reg_write_enable <= 1;
                                         decoded_reg_input_mux <= 2'b00;
-                                        decoded_alu_arithmetic_mux <= 2'b10;
+                                        decoded_alu_arithmetic_mux <= ALU_MUL;
                                     end
                                 endcase
+                            end
+                            F3_SLL: begin
+                                // SLL rd, rs1, rs2 (shift amount = rs2[4:0])
+                                if (instruction[31:25] == F7_ADD) begin 
+                                    decoded_reg_write_enable <= 1;
+                                    decoded_reg_input_mux <= 2'b00;
+                                    decoded_alu_arithmetic_mux <= ALU_SLL;
+                                end
                             end
                             F3_DIV: begin
                                 if (instruction[31:25] == F7_MULDIV) begin 
                                     decoded_reg_write_enable <= 1;
                                     decoded_reg_input_mux <= 2'b00;
-                                    decoded_alu_arithmetic_mux <= 2'b11;
+                                    decoded_alu_arithmetic_mux <= ALU_DIV;
+                                end
+                            end
+                            F3_SRL_SRA: begin
+                                // SRL (funct7 = 0000000) / SRA (funct7 = 0100000)
+                                if (instruction[31:25] == F7_ADD) begin 
+                                    decoded_reg_write_enable <= 1;
+                                    decoded_reg_input_mux <= 2'b00;
+                                    decoded_alu_arithmetic_mux <= ALU_SRL;
+                                end else if (instruction[31:25] == F7_SUB) begin 
+                                    decoded_reg_write_enable <= 1;
+                                    decoded_reg_input_mux <= 2'b00;
+                                    decoded_alu_arithmetic_mux <= ALU_SRA;
                                 end
                             end
                         endcase
                     end
                     OP_IMM: begin 
-                        // ADDI rd, rs1, imm12 (this is `li rd, imm` when rs1 = x0,
-                        // and `nop` when rd = rs1 = x0 and imm = 0)
-                        if (instruction[14:12] == F3_ADD_SUB_MUL) begin 
-                            decoded_reg_write_enable <= 1;
-                            decoded_reg_input_mux <= 2'b00;     // write back ALU result
-                            decoded_alu_arithmetic_mux <= 2'b00; // ADD
-                            decoded_alu_imm_enable <= 1;        // B operand = imm12
-                        end
+                        // Immediate arithmetic, selected by funct3:
+                        //   000 ADDI, 001 SLLI, 101 SRLI / SRAI (imm[11:5] = funct7-like)
+                        // ADDI is `li rd, imm` when rs1 = x0, and `nop` when rd = rs1 = x0, imm = 0
+                        case (instruction[14:12])
+                            F3_ADD_SUB_MUL: begin 
+                                decoded_reg_write_enable <= 1;
+                                decoded_reg_input_mux <= 2'b00;     // write back ALU result
+                                decoded_alu_arithmetic_mux <= ALU_ADD;
+                                decoded_alu_imm_enable <= 1;        // B operand = imm12
+                            end
+                            F3_SLL: begin 
+                                // SLLI rd, rs1, shamt (shamt = imm[4:0], imm[11:5] must be 0)
+                                if (instruction[31:25] == F7_ADD) begin 
+                                    decoded_reg_write_enable <= 1;
+                                    decoded_reg_input_mux <= 2'b00;
+                                    decoded_alu_arithmetic_mux <= ALU_SLL;
+                                    decoded_alu_imm_enable <= 1;    // B operand = imm12 (low 5 bits = shamt)
+                                end
+                            end
+                            F3_SRL_SRA: begin 
+                                // SRLI (imm[11:5] = 0000000) / SRAI (imm[11:5] = 0100000)
+                                if (instruction[31:25] == F7_ADD) begin 
+                                    decoded_reg_write_enable <= 1;
+                                    decoded_reg_input_mux <= 2'b00;
+                                    decoded_alu_arithmetic_mux <= ALU_SRL;
+                                    decoded_alu_imm_enable <= 1;
+                                end else if (instruction[31:25] == F7_SUB) begin 
+                                    decoded_reg_write_enable <= 1;
+                                    decoded_reg_input_mux <= 2'b00;
+                                    decoded_alu_arithmetic_mux <= ALU_SRA;
+                                    decoded_alu_imm_enable <= 1;
+                                end
+                            end
+                        endcase
                     end
                     LOAD: begin 
                         // LDR: `lw rd, imm(rs1)` (I-type, imm12 already sliced)
@@ -213,7 +270,7 @@ module decoder (
                         decoded_immediate <= {instruction[31:12], 12'b0}; // not sign-extended
                         decoded_reg_write_enable <= 1;
                         decoded_reg_input_mux <= 2'b00;
-                        decoded_alu_arithmetic_mux <= 2'b00; // ADD
+                        decoded_alu_arithmetic_mux <= ALU_ADD; // ADD
                         decoded_alu_imm_enable <= 1;
                     end
                     AUIPC: begin 

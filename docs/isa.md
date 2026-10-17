@@ -2,8 +2,8 @@
 
 > **Abyss ISA**(2026-10 起启用此名)是 tiny-gpu 的 32 位 SIMD 指令集。
 > 适用实现:`src/decoder.sv`、`src/registers.sv`、`src/pc.sv`、`src/alu.sv`、`src/lsu.sv`(2026-10 版本)
-> 状态:`make test_matadd`、`make test_matmul` 均 PASS,iverilog 无位宽告警
-> (已用临时用例逐条验证 B 型六种分支条件、`LUI`/`AUIPC`/`JAL` 的立即数与链接值、`JALR` 的调用/返回)。
+> 状态:`make test matadd`、`make test matmul` 均 PASS,iverilog 无位宽告警
+> (已用临时用例逐条验证 B 型六种分支条件、`LUI`/`AUIPC`/`JAL`/`JALR`、以及 6 条移位指令)。
 > **指令格式遵循 RISC-V**(字段位置、funct3/funct7 分派、opcode 低两位为 `11`、custom 段用官方保留编码);
 > 本文描述**当前实现**的语义,与旧版本的差异见第 10 节。
 
@@ -14,7 +14,8 @@
 - **定长 32 位指令**,格式与译码风格**对齐 RISC-V**;数据与地址 32 位;每个线程 32 个寄存器。
 - **执行模型(SIMD)**:一个 core 处理一个 block;block 内 4 个线程(`THREADS_PER_BLOCK`)共享 1 个 fetcher + 1 个 decoder,
   但每个线程各有独立的 ALU、LSU、PC、寄存器堆 —— 同一拍所有线程执行同一条指令。
-- **指令集**:17 条 —— R 型 4 条(`ADD` `SUB` `MUL` `DIV`)、I 型 3 条(`ADDI` `LDR` `JALR`)、S 型 1 条(`STR`)、
+- **指令集**:23 条 —— R 型 7 条(`ADD` `SUB` `MUL` `DIV` `SLL` `SRL` `SRA`)、
+  I 型 6 条(`ADDI` `LDR` `JALR` `SLLI` `SRLI` `SRAI`)、S 型 1 条(`STR`)、
   B 型 6 条(`BEQ` `BNE` `BLT` `BGE` `BLTU` `BGEU`)、U 型 2 条(`LUI` `AUIPC`)、J 型 1 条(`JAL`)、GPU 专用 1 条(`RET`)。
   除 `RET` 之外**全部与 RISC-V 官方编码逐位一致**(R/I/S/B/U/J 六种类型齐全)。
 - **`x0` 恒 0**:`R0`(= `x0`)读恒为 0、写入被忽略(与 RISC-V 一致),因此**不能当普通寄存器用**。
@@ -62,9 +63,15 @@
 | R | `SUB` | `0110011` | `000` | `0100000` | `SUB rd, rs1, rs2` | rd, rs1, rs2 | `sub` |
 | R | `MUL` | `0110011` | `000` | `0000001` | `MUL rd, rs1, rs2` | rd, rs1, rs2 | `mul`(M 扩展) |
 | R | `DIV` | `0110011` | `100` | `0000001` | `DIV rd, rs1, rs2` | rd, rs1, rs2 | `div`(M 扩展) |
+| R | `SLL` | `0110011` | `001` | `0000000` | `SLL rd, rs1, rs2` | rd, rs1, rs2(`rs2[4:0]` = 移位量) | `sll` |
+| R | `SRL` | `0110011` | `101` | `0000000` | `SRL rd, rs1, rs2` | 同上(逻辑右移) | `srl` |
+| R | `SRA` | `0110011` | `101` | `0100000` | `SRA rd, rs1, rs2` | 同上(算术右移) | `sra` |
 | I | `LDR` | `0000011` | `010` | — | `LDR rd, imm(rs1)` | rd, rs1, imm12 偏移 | `lw rd, imm(rs1)` |
 | S | `STR` | `0100011` | `010` | — | `STR rs2, imm(rs1)` | rs1=基址, rs2=数据, imm12 偏移 | `sw rs2, imm(rs1)` |
 | I | `ADDI` | `0010011` | `000` | — | `ADDI rd, rs1, #imm12` | rd, rs1, imm12(符号扩展) | `addi` |
+| I | `SLLI` | `0010011` | `001` | —(imm[11:5]=`0000000`) | `SLLI rd, rs1, shamt` | rd, rs1, `imm[4:0]` = 移位量 | `slli` |
+| I | `SRLI` | `0010011` | `101` | —(imm[11:5]=`0000000`) | `SRLI rd, rs1, shamt` | 同上(逻辑右移) | `srli` |
+| I | `SRAI` | `0010011` | `101` | —(imm[11:5]=`0100000`) | `SRAI rd, rs1, shamt` | 同上(算术右移) | `srai` |
 | B | `BEQ` | `1100011` | `000` | — | `BEQ rs1, rs2, offset` | rs1, rs2, imm13 字节偏移 | `beq` |
 | B | `BNE` | `1100011` | `001` | — | `BNE rs1, rs2, offset` | 同上 | `bne` |
 | B | `BLT` | `1100011` | `100` | — | `BLT rs1, rs2, offset` | 同上(有符号比较) | `blt` |
@@ -134,7 +141,10 @@ RISC-V 保留的 custom 段分配(便于将来扩展,均已避开官方指令编
 | `000` | `0000000` | `ADD` | `ADD rd, rs1, rs2` | `rd ← rs1 + rs2` | `reg_write=1`,`reg_input_mux=00`,`alu_mux=00` |
 | `000` | `0100000` | `SUB` | `SUB rd, rs1, rs2` | `rd ← rs1 − rs2`(模 2³²) | `reg_write=1`,`reg_input_mux=00`,`alu_mux=01` |
 | `000` | `0000001` | `MUL` | `MUL rd, rs1, rs2` | `rd ← rs1 × rs2`(取低 32 位) | `reg_write=1`,`reg_input_mux=00`,`alu_mux=10` |
-| `100` | `0000001` | `DIV` | `DIV rd, rs1, rs2` | `rd ← rs1 ÷ rs2`(**有符号**,向零取整) | `reg_write=1`,`reg_input_mux=00`,`alu_mux=11` |
+| `100` | `0000001` | `DIV` | `DIV rd, rs1, rs2` | `rd ← rs1 ÷ rs2`(**有符号**,向零取整) | `reg_write=1`,`reg_input_mux=00`,`alu_mux=011` |
+| `001` | `0000000` | `SLL` | `SLL rd, rs1, rs2` | `rd ← rs1 << rs2[4:0]` | `reg_write=1`,`reg_input_mux=00`,`alu_mux=100` |
+| `101` | `0000000` | `SRL` | `SRL rd, rs1, rs2` | `rd ← rs1 >> rs2[4:0]`(**逻辑**) | `reg_write=1`,`reg_input_mux=00`,`alu_mux=101` |
+| `101` | `0100000` | `SRA` | `SRA rd, rs1, rs2` | `rd ← rs1 >>> rs2[4:0]`(**算术**,带符号) | `reg_write=1`,`reg_input_mux=00`,`alu_mux=110` |
 
 `ADD`/`SUB`/`MUL`/`DIV` 的编码与 RISC-V 官方一致(含 M 扩展的 `funct7=0000001`)。
 
@@ -195,6 +205,8 @@ RISC-V 保留的 custom 段分配(便于将来扩展,均已避开官方指令编
 | `0010011` | `000` | `ADDI` | `ADDI rd, rs1, #imm12` | `rd ← rs1 + 符号扩展(imm12)` | `reg_write=1`,`reg_input_mux=00`,`alu_mux=00`,`alu_imm_enable=1` |
 | `0000011` | `010` | `LDR` | `LDR rd, imm(rs1)` | `rd ← mem[rs1 + 符号扩展(imm12)]`(异步) | `reg_write=1`,`reg_input_mux=01`,`mem_read_enable=1` |
 | `0100011` | `010` | `STR` | `STR rs2, imm(rs1)` | `mem[rs1 + 符号扩展(imm12)] ← rs2`(异步) | `mem_write_enable=1` |
+| `0010011` | `001` | `SLLI` | `SLLI rd, rs1, shamt` | `rd ← rs1 << shamt`(shamt = `imm[4:0]`,`imm[11:5]` 必须为 0) | `reg_write=1`,`reg_input_mux=00`,`alu_mux=100`,`alu_imm_enable=1` |
+| `0010011` | `101` | `SRLI` / `SRAI` | `SRLI/SRAI rd, rs1, shamt` | `rd ← rs1 >> shamt` / `rd ← rs1 >>> shamt` | 同上,`alu_mux=101` / `110`,靠 `imm[11:5]`(`0000000` / `0100000`)区分 |
 
 - `ADDI` 把 ALU 的 B 操作数从 `rs2` 切到符号扩展后的 `imm12`(`decoded_alu_imm_enable`,ALU 内部一个 2:1 mux),运算仍是 ADD。
   `ADDI rd, x0, #imm` 就是伪指令 `LI rd, #imm`;`ADDI x0, x0, #0` 就是 `NOP`(写入 x0 被忽略,所以真的什么都不做)。
@@ -209,6 +221,7 @@ RISC-V 保留的 custom 段分配(便于将来扩展,均已避开官方指令编
 | 指令 | 读寄存器 | 计算 / 访存 | 写回 |
 | - | - | - | - |
 | `ADD` `SUB` `MUL` `DIV` | `REQUEST` 采样 rs、rt | `EXECUTE` ALU 运算 | `UPDATE` 写 rd |
+| `SLL` `SRL` `SRA` `SLLI` `SRLI` `SRAI` | `REQUEST` 采样 rs1、rs2 | `EXECUTE` 桶形移位器(1 拍) | `UPDATE` 写 rd |
 | `LDR` | `REQUEST` 采样 rs1(基址) | 地址 = rs1 + imm;`REQUEST` 发起读,`WAIT` 等应答 | `UPDATE` 写 rd |
 | `STR` | `REQUEST` 采样 rs1(基址)、rs2(数据) | 地址 = rs1 + imm;`REQUEST` 发起写,`WAIT` 等应答 | — |
 | `ADDI` | `REQUEST` 采样 rs1 | `EXECUTE` ALU 加立即数 | `UPDATE` 写 rd |
@@ -284,6 +297,9 @@ B 型:instr = (imm[12] << 31) | (imm[10:5] << 25) | (rs2 << 20) | (rs1 << 15)
               | (funct3 << 12) | (imm[4:1] << 8) | (imm[11] << 7) | opcode
 U 型:instr = (imm20 << 12) | (rd << 7) | opcode
 J 型:instr = (imm[20] << 31) | (imm[10:1] << 21) | (imm[11] << 20) | (imm[19:12] << 12) | (rd << 7) | opcode
+移位(R 型):instr 同 R 型,只需 funct3/funct7(SLL = 001/0000000,SRL = 101/0000000,SRA = 101/0100000)
+移位(I 型):instr = ((0x20 或 0) << 25) | (shamt << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | opcode
+            SLLI/SRLI 的 imm[11:5] = 0000000,SRAI 的 = 0100000;shamt 恒为 0 … 31
 ```
 
 (完整分配见 [2.2 指令类型总表](#22-指令类型总表完整)。)
@@ -293,6 +309,8 @@ J 型:instr = (imm[20] << 31) | (imm[10:1] << 21) | (imm[11] << 20) | (imm[19:12
 | 本 ISA | 等价 RISC-V | 是否逐位相同 |
 | - | - | - |
 | `ADD/SUB/MUL/DIV` | `add/sub/mul/div` | ✅(含 M 扩展 funct7) |
+| `SLL/SRL/SRA` | `sll/srl/sra` | ✅ |
+| `SLLI/SRLI/SRAI` | `slli/srli/srai` | ✅(imm[11:5] 的 0000000 / 0100000 完全一致) |
 | `ADDI rd, rs1, #imm` | `addi rd, rs1, imm` | ✅ |
 | `LDR rd, imm(rs1)` | `lw rd, imm(rs1)` | ✅ |
 | `STR rs2, imm(rs1)` | `sw rs2, imm(rs1)` | ✅ |
@@ -324,7 +342,12 @@ J 型:instr = (imm[20] << 31) | (imm[10:1] << 21) | (imm[11] << 20) | (imm[19:12
 | `DIV R6, R13, R2` | **0x0226C333** |
 | `BLT R9, R2, LOOP`(偏移 −36 字节 = 往回 9 条) | **0xFC24CEE3** || `JAL R5, 12`(链接值 4) | **0x00C002EF** |
 | `JALR x0, 0(R5)`(返回) | **0x00028067** |
-| `JALR R7, 1(R6)`(目标 = `(R6+1) >>> 2`) | **0x001303E7** || `LUI R1, 0x12345` | **0x123450B7** |
+| `JALR R7, 1(R6)`(目标 = `(R6+1) >>> 2`) | **0x001303E7** |
+| `SLLI R2, R1, 3`(R1=6 → 48) | **0x00309113** |
+| `SRLI R3, R2, 2`(48 → 12) | **0x00215193** |
+| `SRAI R5, R4, 1`(R4=-8 → -4) | **0x40125293** |
+| `SRL R10, R2, R7`(48 >> R7[4:0]) | **0x00715533** |
+| `SRA R11, R4, R7`(-8 >>> R7[4:0]) | **0x407255B3** || `LUI R1, 0x12345` | **0x123450B7** |
 | `AUIPC R2, 0x00000` | **0x00000117** |
 | `AUIPC R5, 0x00001` | **0x00001297** |
 | `JAL R3, 8`(链接值 = `PC+4`) | **0x008001EF** |
@@ -367,6 +390,10 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 - `PC` 相关量的单位是**字节**(`PC 字节地址 = 指令下标 × 4`):`JAL`/`JALR`/`AUIPC` 写进 rd 的值、B/J 型偏移都是字节量;
 - 访存写 `LDR rd, imm(rs1)` / `STR rs2, imm(rs1)`:有效地址 = `rs1 + 符号扩展(imm12)`,偏移可以是负数(如 `-4(R1)`)。
 - 空操作写 `NOP`(= `ADDI x0, x0, #0`,`0x00000013`),不要再依赖全 0 字。
+- 移位写 `SLLI/SRLI/SRAI rd, rs1, shamt`(shamt = 0 … 31,**不带 `#`**)或 `SLL/SRL/SRA rd, rs1, rs2`。
+  移位量恒取低 5 位 (`mod 32`):`SLL rd, rs1, r` 里 `r = 33` 实际只移 1 位;
+  `>>` 选 `SRL`(逻辑,无符号语义)还是 `SRA`(算术,有符号语义)**必须按 C 类型自己选**:
+  `unsigned >>` 用 `SRL`,`int >>` 用 `SRA`。乘 2 的幂可以用 `SLLI` 代替 `MUL`。
 - 测试目前直接写字面量,注意:
   - **必须正好 32 位** —— 多一位/少一位都会让字段整体错位(历史上就踩过这个坑);
   - 推荐按 `0b` + R 型 `7/5/5/3/5/7`、I 型 `12/5/3/5/7` 分段书写,并在行尾注明对应的汇编,便于 review。
@@ -391,6 +418,8 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 | U/J 型没有 funct3/funct7 | 那几位就是立即数(`LUI`/`AUIPC`/`JAL` 的该 opcode 全空间都有定义,不存在“未分配 funct3”) |
 | `JALR` 的 funct3 ≠ `000` | 该编码未分配,等同 `NOP`(`JALR` 是 I 型,有 funct3) |
 | `JALR` 目标不是 4 的倍数 | 低两位被 `>>> 2` 丢弃(向下取整),不 trap(RISC-V 是 `& ~1` 后对齐异常) |
+| 移位的 funct7 / imm[11:5] 不合法(如 `SLL` 的 funct7 ≠ 0、`SLLI` 的 imm[11:5] ≠ 0) | 该编码未分配,等同 `NOP` |
+| 移位量 ≥ 32 | 硬件只取低 5 位(自动 `mod 32`);汇编器/编译器应当提前拒绝 |
 
 ## 10. 版本历史
 
@@ -499,7 +528,27 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 1. `decoder` 新增 `decoded_jalr_enable`(只多 1 位控制信号,B 型/U/J 型的路径不变)。
 2. `pc.sv` 的 A 端口多一个 2:1 mux(`PC_byte` / `rs1`),`next_pc` 前多一个目标 mux;**没有新增 32 位加法器**。
 3. 调用/返回链路打通:`JAL ra, func` + `JALR x0, 0(ra)`。
-   C 语言还缺:**移位**、**字节/半字访存**、`SLT` 类,以及一套 ABI(栈指针、`ra`/参数用哪些寄存器)。
+   C 语言还缺:**字节/半字访存**、`SLT` 类,以及一套 ABI(栈指针、`ra`/参数用哪些寄存器);
+   移位已在下一节补上。
+
+### 移位指令(2026-10)
+
+| 项 | 改动前 | 现在 |
+| - | - | - |
+| 移位 | 没有;C 的 `<<` 只能靠 `MUL` 乘 2 的幂模拟(`riscv2abyss.py` 里明确写着 “slli by more than 3 is not supported”) | **`SLL`/`SRL`/`SRA`(R 型)+ `SLLI`/`SRLI`/`SRAI`(I 型)** |
+| ALU 操作码 | `decoded_alu_arithmetic_mux` 2 位(4 个操作) | **3 位**(7 个操作,`000`–`110`) |
+| ALU 数据通路 | 加 / 减 / 乘 / 除 | 多一个 32 位**桶形移位器**(`<<` / `>>` / `>>>`) |
+
+影响:
+
+1. `decoder` 的 `OP` / `OP_IMM` 两个分支改成 `case (funct3)`:`001` = SLL/SLLI,`101` = SRL/SRA/SRLI/SRAI;
+   后者靠 funct7(**I 型是 `imm[11:5]`**)区分逻辑/算术。
+2. 移位量直接取 **B 操作数的低 5 位** —— R 型时 B = rs2,I 型时 B = 立即数(`decoded_alu_imm_enable` 已经切好),
+   **没有新增 mux**。RISC-V 的 `mod 32` 语义因此天然成立(`SLL rd, rs1, r` 里 r = 33 只移 1 位)。
+3. 操作码扩到 3 位 → `alu.sv` / `decoder.sv` / `core.sv` 三处同步;前 4 个操作的编码值保持不变。
+4. 工具链:`tools/abysscc/riscv2abyss.py` 删掉 `slli → MUL` 的 hack,`sll/srl/sra/slli/srli/srai` 现在直通;
+   `start.s` 里为那个 hack 预置的三个常量(R23/R27/R28)可以删掉。
+5. 代价:**每线程一个 32 位桶形移位器**(5 级 2:1 mux),这是本次唯一的实际面积开销。
 
 ### 更名 + 手册迁址(2026-10)
 
@@ -515,7 +564,7 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 | opcode / funct3 / funct7 分派、字段切片、控制信号 | `src/decoder.sv` |
 | 寄存器堆(x0 恒 0、R1–R28 可写、只读 29/30/31) | `src/registers.sv` |
 | 分支比较、PC 相对/寄存器间接跳转、`pc_result`(JAL/JALR/AUIPC 写回值)、PC 计算 | `src/pc.sv` |
-| 算术运算、立即数选择(ADDI / LUI) | `src/alu.sv` |
+| 算术运算、立即数选择(ADDI / LUI)、移位 | `src/alu.sv` |
 | `LDR` / `STR` 的异步请求与 `rs1 + imm` 地址加法 | `src/lsu.sv` + `src/controller.sv` |
 | 8 态控制流 | `src/scheduler.sv` |
 | block 分配与 `done` | `src/dispatch.sv` |
@@ -527,7 +576,7 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 | - | - | - |
 | `decoded_reg_input_mux` | `00` ALU / `01` LSU / `10` PC 单元 | 选择写回 rd 的数据来源(`LUI` 用 `00`,`JAL`/`AUIPC` 用 `10`) |
 | `decoded_alu_imm_enable` | `1` | ALU 的 B 操作数改用立即数(`ADDI` / `LUI`) |
-| `decoded_alu_arithmetic_mux` | `00` ADD / `01` SUB / `10` MUL / `11` DIV | ALU 运算选择 |
+| `decoded_alu_arithmetic_mux` | `000` ADD / `001` SUB / `010` MUL / `011` DIV / `100` SLL / `101` SRL / `110` SRA | ALU 运算选择(3 位,移位量取 B 操作数低 5 位) |
 | `decoded_branch_enable` | `1` | PC 走分支逻辑(B 型) |
 | `decoded_branch_cond` | `= funct3` | 选择分支条件(`000` BEQ / `001` BNE / `100` BLT / `101` BGE / `110` BLTU / `111` BGEU) |
 | `decoded_jump_enable` | `1` | 无条件跳转 + 链接(`JAL`) |
@@ -540,7 +589,7 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 
 | 差异 | 现状 | 补齐需要 |
 | - | - | - |
-| 无移位指令 | 缺 `SLL`/`SRL`/`SRA`(RISC-V OP 的 funct3 `001`/`101`) | 移位器(译码只需 funct3) |
+| ~~无移位指令~~ | **2026-10 已补** `SLL/SRL/SRA` + `SLLI/SRLI/SRAI`(ALU 多一个 32 位桶形移位器) | — |
 | 无 `JALR` | ~~只有直接跳转,没有间接跳转/返回~~ **2026-10 已补** | — |
 | 无 ABI / 栈 | 有 `JAL`/`JALR`,但未约定 `ra`/`sp`/参数寄存器/栈布局 | 定 ABI + 编译器后端 |
 | 无 `SLT`/`SLTI`/`SLTU` | 比较结果只用于分支,不进寄存器 | ALU 比较结果写回通路(mux 已够用,`reg_input_mux` 还有空余) |
