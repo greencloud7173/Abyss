@@ -80,6 +80,9 @@ def format_instruction(instruction: str) -> str:
         return f"LUI {rd_name}, #{int(instruction[0:20], 2)}"
     elif opcode == "0010111":  # U-type AUIPC: rd = PC + (imm20 << 12)
         return f"AUIPC {rd_name}, #{int(instruction[0:20], 2)}"
+    elif opcode == "1100111":  # I-type JALR: rd = PC + 4, PC = (rs1 + imm) & ~1
+        if funct3 == "000":
+            return f"JALR {rd_name}, {signed_imm}({rs1_name})"
     elif opcode == "1101111":  # J-type JAL: rd = PC + 4, PC += offset (offset in bytes)
         # imm[20]=inst[31], imm[10:1]=inst[30:21], imm[11]=inst[20], imm[19:12]=inst[19:12], imm[0]=0
         jal_imm = int(instruction[0] + instruction[12:20] + instruction[11] + instruction[1:11] + "0", 2)

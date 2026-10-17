@@ -1,8 +1,9 @@
-# tiny-gpu 32-bit ISA 手册
+# Abyss ISA 手册
 
+> **Abyss ISA**(2026-10 起启用此名)是 tiny-gpu 的 32 位 SIMD 指令集。
 > 适用实现:`src/decoder.sv`、`src/registers.sv`、`src/pc.sv`、`src/alu.sv`、`src/lsu.sv`(2026-10 版本)
 > 状态:`make test_matadd`、`make test_matmul` 均 PASS,iverilog 无位宽告警
-> (已用临时用例逐条验证 B 型六种分支条件、`LUI`/`AUIPC`/`JAL` 的立即数与链接值)。
+> (已用临时用例逐条验证 B 型六种分支条件、`LUI`/`AUIPC`/`JAL` 的立即数与链接值、`JALR` 的调用/返回)。
 > **指令格式遵循 RISC-V**(字段位置、funct3/funct7 分派、opcode 低两位为 `11`、custom 段用官方保留编码);
 > 本文描述**当前实现**的语义,与旧版本的差异见第 10 节。
 
@@ -13,14 +14,15 @@
 - **定长 32 位指令**,格式与译码风格**对齐 RISC-V**;数据与地址 32 位;每个线程 32 个寄存器。
 - **执行模型(SIMD)**:一个 core 处理一个 block;block 内 4 个线程(`THREADS_PER_BLOCK`)共享 1 个 fetcher + 1 个 decoder,
   但每个线程各有独立的 ALU、LSU、PC、寄存器堆 —— 同一拍所有线程执行同一条指令。
-- **指令集**:16 条 —— R 型 4 条(`ADD` `SUB` `MUL` `DIV`)、I 型 2 条(`ADDI` `LDR`)、S 型 1 条(`STR`)、
+- **指令集**:17 条 —— R 型 4 条(`ADD` `SUB` `MUL` `DIV`)、I 型 3 条(`ADDI` `LDR` `JALR`)、S 型 1 条(`STR`)、
   B 型 6 条(`BEQ` `BNE` `BLT` `BGE` `BLTU` `BGEU`)、U 型 2 条(`LUI` `AUIPC`)、J 型 1 条(`JAL`)、GPU 专用 1 条(`RET`)。
   除 `RET` 之外**全部与 RISC-V 官方编码逐位一致**(R/I/S/B/U/J 六种类型齐全)。
 - **`x0` 恒 0**:`R0`(= `x0`)读恒为 0、写入被忽略(与 RISC-V 一致),因此**不能当普通寄存器用**。
 - **伪指令**:`NOP` = `ADDI x0, x0, #0`(编码 `0x00000013`)、`LI rd, #imm` = `ADDI rd, x0, #imm`、
   `J offset` = `JAL x0, offset`;已经没有单独的 `NOP`/`CONST` 指令。
-- **控制流**:条件分支是 RISC-V **B 型**(`PC + 符号扩展字节偏移`),无条件跳转/调用是 **J 型 `JAL`**,
-  `AUIPC`/`JAL` 的写回值由 PC 单元产生;**没有 NZP 标志寄存器**;固定 8 个状态(第 6 节),
+- **控制流**:条件分支是 RISC-V **B 型**(`PC + 符号扩展字节偏移`),调用/直接跳转是 **J 型 `JAL`**,
+  返回/间接跳转是 **I 型 `JALR`**;`AUIPC`/`JAL`/`JALR` 的写回值由 PC 单元产生;**没有 NZP 标志寄存器**;
+  固定 8 个状态(第 6 节),
   不支持分支发散 —— 假设所有线程每步收敛到同一 PC。
 - **译码取向**:所有字段都是**固定切片**;译码 = `case (opcode)`(R 型内再嵌 `case (funct3)` / `case (funct7)`),
   没有"按指令类型切换字段来源"的 mux。
@@ -72,6 +74,7 @@
 | U | `LUI` | `0110111` | — | — | `LUI rd, imm20` | rd,imm20(写入 `imm20<<12`) | `lui` |
 | U | `AUIPC` | `0010111` | — | — | `AUIPC rd, imm20` | rd,imm20(写入 `PC + imm20<<12`) | `auipc` |
 | J | `JAL` | `1101111` | — | — | `JAL rd, offset` | rd,imm21(链接值 `PC+4`) | `jal` |
+| I | `JALR` | `1100111` | `000` | — | `JALR rd, imm(rs1)` | rd, rs1=目标基址, imm12 偏移(链接值 `PC+4`) | `jalr` |
 | I | `RET` | `1011011` | `000` | — | `RET` | 全 0 | —(custom-2) |
 
 类型判定一览:
@@ -153,23 +156,29 @@ RISC-V 保留的 custom 段分配(便于将来扩展,均已避开官方指令编
 - 偏移的 `>>> 2` 在 `src/pc.sv` 里只是**接线**:PC 以“指令条数”计,程序存储器按字寻址 ⇒ 字节偏移右移两位就是指令条数。
 - 比较在 `src/pc.sv` 里**每线程各做一次**,直接比较 `rs1`/`rs2`,不经 ALU、不写任何标志位。
 
-### 4.3 U 型与 J 型(高位立即数 / 跳转)
+### 4.3 U 型、J 型与 JALR(高位立即数 / 跳转)
 
 | opcode | 指令 | 语法 | 操作 | 关键控制信号 |
 | - | - | - | - | - |
 | `0110111` | `LUI` | `LUI rd, imm20` | `rd ← imm20 << 12`(低 12 位为 0) | `reg_write=1`,`reg_input_mux=00`,`alu_mux=00`(ADD),`alu_imm_enable=1`,rs1 被强指为 `x0` |
 | `0010111` | `AUIPC` | `AUIPC rd, imm20` | `rd ← PC + (imm20 << 12)` | `reg_write=1`,`reg_input_mux=10`(PC 单元算值) |
 | `1101111` | `JAL` | `JAL rd, offset` | `rd ← PC + 4`;`PC ← PC + (offset >>> 2)` | `reg_write=1`,`reg_input_mux=10`,`jump_enable=1` |
+| `1100111` | `JALR`(I 型) | `JALR rd, imm(rs1)` | `rd ← PC + 4`;`PC ← (rs1 + imm) >>> 2` | `reg_write=1`,`reg_input_mux=10`,`jalr_enable=1`,funct3 必须是 `000` |
 
 - `LUI` 复用 ALU 的 ADD:**把 rs1 地址强指成 `x0`**(=0),B 操作数用立即数,于是 `0 + (imm20 << 12)`。
   没有新增 ALU 运算,也没有新增 mux —— 只需 decoder 把 `decoded_rs_address` 改成 0。
-- `AUIPC`/`JAL` 的写回值不是 ALU 结果,而是 **PC 单元算出来的值**(`reg_input_mux = 10`,即原来空着的编码):
-  `JAL` 是 `PC + 4`,`AUIPC` 是 `PC + (imm20 << 12)`;两者共用 PC 单元里“`PC_byte + 加数`”那个加法器,
-  加数在常数 `4`(JAL)与立即数(AUIPC)之间选。
+- `AUIPC`/`JAL`/`JALR` 的写回值不是 ALU 结果,而是 **PC 单元算出来的值**(`reg_input_mux = 10`,即原来空着的编码):
+  `JAL`/`JALR` 的链接值是 `(PC + 1) << 2`(**纯接线**),`AUIPC` 是 `PC + (imm20 << 12)`。
+- PC 单元里只有 **2 个 32 位加法器/线程**:一个算 `next_pc`,另一个由 **AUIPC 与 JALR 共享** ——
+  A 端口在 `PC_byte`(AUIPC)与 `rs1`(JALR)之间切,B 端口恒为立即数。
+- `JALR` 是**寄存器间接跳转**:目标字节地址 = `rs1 + 符号扩展(imm12)`,再 `>>> 2` 变指令下标。
+  这个加法必须在 **PC 单元**做(不能用 ALU):ALU 输出是**寄存器打拍**的,EXECUTE 当拍拿不到结果,
+  而 `next_pc` 必须在 EXECUTE 拍内算好。
+- `JALR` 要求目标 4 字节对齐:`>>> 2` 会丢掉最低两位(RISC-V 是 `& ~1`,本实现再向下取整到 4),不 trap。
 - **PC 表示“第几条指令”,而 PC 相关量按 RISC-V 语义是字节地址**:`PC_byte = current_pc * 4`;`*4` 与 `>>> 2` 都只是接线。
 - `offset` 相对**当前**指令:`8` = 跳过下一条,`-8` = 往回一条(必须是 2 的倍数)。
 - `rd = x0` 时写入被忽略 ⇒ **`JAL x0, offset` 就是无条件跳转**(伪指令 `J offset`);
-  `JAL ra, offset` 是调用,链接值 = 下一条指令的字节地址(将来配 `JALR` 就能实现返回)。
+  `JAL ra, offset` 是调用,链接值 = 下一条指令的字节地址;配上 `JALR x0, 0(ra)` 就是完整的调用/返回。
 - `imm20` 是**无符号** 20 位(`LUI rd, 0xFFFFF` → `0xFFFFF000`);`JAL` 的偏移是**有符号** 21 位。
 - 立即数范围:`LUI`/`AUIPC` 的 imm20 = 0 … 1048575;`JAL` 偏移 = −1048576 … +1048574。
 
@@ -206,6 +215,7 @@ RISC-V 保留的 custom 段分配(便于将来扩展,均已避开官方指令编
 | `LUI` | 无需读(rs1 强指 `x0`) | `EXECUTE` ALU 加 `imm20<<12` | `UPDATE` 写 rd |
 | `AUIPC` | — | `EXECUTE` PC 单元算 `PC + imm` | `UPDATE` 写 rd |
 | `JAL` | — | `EXECUTE` 算目标 PC | `UPDATE` 写 rd(链接值)**并**改 PC |
+| `JALR`(I 型) | `REQUEST` 采样 rs1(目标基址) | `EXECUTE` 算 `(rs1 + imm) >>> 2` | `UPDATE` 写 rd(链接值)**并**改 PC |
 | B 型分支 | `REQUEST` 采样 rs1、rs2 | `EXECUTE` 比较并决定是否跳转 | `UPDATE` 改 PC |
 | `NOP` `RET` | — | — | — |
 
@@ -228,9 +238,11 @@ RISC-V 保留的 custom 段分配(便于将来扩展,均已避开官方指令编
   汇编里的 `offset` 相对**当前**指令,所以“跳过下一条”写 `offset = 8`。
 - **`JAL` 是无条件跳转**:`PC ← PC + (offset >>> 2)` 且 `rd ← PC + 4`(链接值);
   `JAL x0, offset` 不写任何寄存器,就是纯跳转。
+- **`JALR` 是寄存器间接跳转**:`PC ← (rs1 + imm) >>> 2` 且 `rd ← PC + 4`。
+  目标来自寄存器 ⇒ 可以跳“算出来的地址”(返回/函数指针/跳转表);`JALR x0, 0(ra)` 就是 `return`。
 - **`AUIPC` 不改变控制流**(`PC ← PC + 1`),只把 `PC + (imm20<<12)` 写进 rd;
-  它与 `JAL` 都用 `reg_input_mux = 10` 从 PC 单元写回(PC 单元里加数在常数 `4` 与立即数之间选)。
-- `JAL` / `AUIPC` 写入的 rd 值是 **字节地址**(PC × 4);与 B/J 型偏移保持同一套“PC 相关量按字节计”的约定。
+  它与 `JAL`/`JALR` 都用 `reg_input_mux = 10` 从 PC 单元写回。
+- `JAL` / `JALR` / `AUIPC` 写入的 rd 值是 **字节地址**(PC × 4);与 B 型偏移保持同一套“PC 相关量按字节计”的约定。
 - 分支与比较是同一条指令 ⇒ 条件跳转**不再需要**“标志位先由另一条指令写入”(旧的 `CMP` + `BRnzp` 要隔一条)。
 - 实现细节(`src/pc.sv`):`rs_signed < rt_signed`(有符号)与 `rs < rt`(无符号)两个比较结果 + 一个 `case` 选条件;
   `>>> 2`、`PC*4` 与符号扩展都是接线,没有额外算术逻辑。
@@ -288,6 +300,7 @@ J 型:instr = (imm[20] << 31) | (imm[10:1] << 21) | (imm[11] << 20) | (imm[19:12
 | `LUI rd, imm20` | `lui rd, imm20` | ✅ |
 | `AUIPC rd, imm20` | `auipc rd, imm20` | ✅ |
 | `JAL rd, offset` | `jal rd, offset` | ✅ |
+| `JALR rd, imm(rs1)` | `jalr rd, imm(rs1)` | ✅ |
 | `NOP`(`ADDI x0, x0, #0`) / `LI rd, #imm` / `J offset` | `nop` / `li rd, imm` / `j offset` | ✅ |
 | `RET` | — | custom-2 |
 
@@ -309,8 +322,9 @@ J 型:instr = (imm[20] << 31) | (imm[10:1] << 21) | (imm[11] << 20) | (imm[19:12
 | `ADD R6, R4, R5` | **0x00520333** |
 | `SUB R7, R13, R7` | **0x407683B3** |
 | `DIV R6, R13, R2` | **0x0226C333** |
-| `BLT R9, R2, LOOP`(偏移 −36 字节 = 往回 9 条) | **0xFC24EEE3** |
-| `LUI R1, 0x12345` | **0x123450B7** |
+| `BLT R9, R2, LOOP`(偏移 −36 字节 = 往回 9 条) | **0xFC24CEE3** || `JAL R5, 12`(链接值 4) | **0x00C002EF** |
+| `JALR x0, 0(R5)`(返回) | **0x00028067** |
+| `JALR R7, 1(R6)`(目标 = `(R6+1) >>> 2`) | **0x001303E7** || `LUI R1, 0x12345` | **0x123450B7** |
 | `AUIPC R2, 0x00000` | **0x00000117** |
 | `AUIPC R5, 0x00001` | **0x00001297** |
 | `JAL R3, 8`(链接值 = `PC+4`) | **0x008001EF** |
@@ -346,9 +360,11 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
   换算:`offset = (目标指令下标 − 当前指令下标) × 4`。
 - 跳转/调用写 `JAL rd, offset`(`offset` 同样是相对当前指令的字节数,要求 2 的倍数;`rd ← PC + 4`)。
   **无条件跳转**用 `JAL x0, offset`(伪指令 `J offset`)—— 不写任何寄存器,也不用 `x0` 做比较。
+- 间接跳转/返回写 `JALR rd, imm(rs1)`:目标 = `rs1 + imm`(字节地址,需 4 字节对齐)。
+  返回惯例是 `JALR x0, 0(ra)`;本项目还没有 ABI,自己先固定 `ra`(建议 `R1`)和 `sp`(建议 `R2`)。
 - 取高位常量写 `LUI rd, imm20`(`rd = imm20 << 12`,立即数**无符号**);PC 相对地址写 `AUIPC rd, imm20`。
   组合出任意 32 位常量:`LUI rd, %hi(x)` + `ADDI rd, rd, #%lo(x)`。
-- `PC` 相关量的单位是**字节**(`PC 字节地址 = 指令下标 × 4`):`JAL`/`AUIPC` 写进 rd 的值、非法 B/J 型偏移都是字节量;
+- `PC` 相关量的单位是**字节**(`PC 字节地址 = 指令下标 × 4`):`JAL`/`JALR`/`AUIPC` 写进 rd 的值、B/J 型偏移都是字节量;
 - 访存写 `LDR rd, imm(rs1)` / `STR rs2, imm(rs1)`:有效地址 = `rs1 + 符号扩展(imm12)`,偏移可以是负数(如 `-4(R1)`)。
 - 空操作写 `NOP`(= `ADDI x0, x0, #0`,`0x00000013`),不要再依赖全 0 字。
 - 测试目前直接写字面量,注意:
@@ -373,6 +389,8 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 | 分支目标超出程序长度 | 取到全 0(NOP)后继续顺序执行,不 trap |
 | B/J 型偏移不是 4 的倍数 | 低两位被右移丢弃(硬件只取 `imm >>> 2`),等价于向下取整到 4 的倍数 |
 | U/J 型没有 funct3/funct7 | 那几位就是立即数(`LUI`/`AUIPC`/`JAL` 的该 opcode 全空间都有定义,不存在“未分配 funct3”) |
+| `JALR` 的 funct3 ≠ `000` | 该编码未分配,等同 `NOP`(`JALR` 是 I 型,有 funct3) |
+| `JALR` 目标不是 4 的倍数 | 低两位被 `>>> 2` 丢弃(向下取整),不 trap(RISC-V 是 `& ~1` 后对齐异常) |
 
 ## 10. 版本历史
 
@@ -467,7 +485,28 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
    (ALU 不变),`AUIPC`/`JAL` 只置 `reg_input_mux = 10`。
 2. `pc.sv` 新增 `pc_result` 输出(`PC*4 + (JAL ? 4 : imm)`)并送入寄存器堆,PC 加法器的一个加数在 `imm>>>2`、`1` 之间选。
 3. 立即数改成 32 位归一化后,`alu.sv`/`lsu.sv` 里的符号扩展代码全部删除(纯简化)。
-4. 指令类型 R/I/S/B/U/J **六种齐全**;仍缺的是 `JALR`(I 型) 与移位/`SLT` 类。
+4. 指令类型 R/I/S/B/U/J **六种齐全**;当时仍缺的 `JALR`(I 型)已在同一月补上,见下一节。
+
+### JALR(I 型,2026-10)
+
+| 项 | 改动前 | 现在 |
+| - | - | - |
+| 间接跳转 / 返回 | 没有;`JAL` 只能跳 PC 相对目标 | **`JALR rd, imm(rs1)`**(opcode `1100111`,funct3 `000`) |
+| PC 单元的加法器 | 2 个:`next_pc`、`pc_result`(`PC_byte + {4, imm}`) | **仍是 2 个**:第二个改成 AUIPC(`PC_byte + imm`)与 JALR(`rs1 + imm`)共享;链接值 `(PC+1) << 2` 变成纯接线 |
+
+影响:
+
+1. `decoder` 新增 `decoded_jalr_enable`(只多 1 位控制信号,B 型/U/J 型的路径不变)。
+2. `pc.sv` 的 A 端口多一个 2:1 mux(`PC_byte` / `rs1`),`next_pc` 前多一个目标 mux;**没有新增 32 位加法器**。
+3. 调用/返回链路打通:`JAL ra, func` + `JALR x0, 0(ra)`。
+   C 语言还缺:**移位**、**字节/半字访存**、`SLT` 类,以及一套 ABI(栈指针、`ra`/参数用哪些寄存器)。
+
+### 更名 + 手册迁址(2026-10)
+
+| 项 | 改动前 | 现在 |
+| - | - | - |
+| ISA 名称 | "tiny-gpu 32-bit ISA" | **Abyss ISA** |
+| 手册位置 | `isa/isa.md` | **`docs/isa.md`**(单一副本,不再维护两份) |
 
 ## 11. 与 RTL 的对应关系
 
@@ -475,7 +514,7 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 | - | - |
 | opcode / funct3 / funct7 分派、字段切片、控制信号 | `src/decoder.sv` |
 | 寄存器堆(x0 恒 0、R1–R28 可写、只读 29/30/31) | `src/registers.sv` |
-| 分支比较、PC 相对跳转、`pc_result`(JAL/AUIPC 写回值)、PC 计算 | `src/pc.sv` |
+| 分支比较、PC 相对/寄存器间接跳转、`pc_result`(JAL/JALR/AUIPC 写回值)、PC 计算 | `src/pc.sv` |
 | 算术运算、立即数选择(ADDI / LUI) | `src/alu.sv` |
 | `LDR` / `STR` 的异步请求与 `rs1 + imm` 地址加法 | `src/lsu.sv` + `src/controller.sv` |
 | 8 态控制流 | `src/scheduler.sv` |
@@ -492,6 +531,7 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 | `decoded_branch_enable` | `1` | PC 走分支逻辑(B 型) |
 | `decoded_branch_cond` | `= funct3` | 选择分支条件(`000` BEQ / `001` BNE / `100` BLT / `101` BGE / `110` BLTU / `111` BGEU) |
 | `decoded_jump_enable` | `1` | 无条件跳转 + 链接(`JAL`) |
+| `decoded_jalr_enable` | `1` | 寄存器间接跳转 + 链接(`JALR`) |
 | `decoded_ret` | `1` | 结束本 block(`RET`) |
 
 ## 12. 设计取舍与扩展预留
@@ -501,7 +541,8 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 | 差异 | 现状 | 补齐需要 |
 | - | - | - |
 | 无移位指令 | 缺 `SLL`/`SRL`/`SRA`(RISC-V OP 的 funct3 `001`/`101`) | 移位器(译码只需 funct3) |
-| 无 `JALR` | 只有直接跳转,没有间接跳转/返回 | I 型 `1100111`:把 ALU 结果接到 PC 单元作为跳转目标 |
+| 无 `JALR` | ~~只有直接跳转,没有间接跳转/返回~~ **2026-10 已补** | — |
+| 无 ABI / 栈 | 有 `JAL`/`JALR`,但未约定 `ra`/`sp`/参数寄存器/栈布局 | 定 ABI + 编译器后端 |
 | 无 `SLT`/`SLTI`/`SLTU` | 比较结果只用于分支,不进寄存器 | ALU 比较结果写回通路(mux 已够用,`reg_input_mux` 还有空余) |
 | 无字节/半字访存与扩展加载 | 只有字的 `LDR`/`STR` | `LB`/`LH`/`LBU`/`LHU` 与写回扩展 mux |
 | 无 `DIVU` / `REM` | 只有有符号 `DIV` | ALU 再加一条运算(OP 的 funct3 `101` 空着) |

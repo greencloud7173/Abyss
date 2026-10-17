@@ -39,7 +39,7 @@ module decoder (
     output reg decoded_branch_enable,              // Branch (B-type) instruction
     output reg [2:0] decoded_branch_cond,          // Branch condition (= funct3)
     output reg decoded_jump_enable,                // Jump with link (J-type JAL)
-
+    output reg decoded_jalr_enable,                // Jump with link, register target (I-type JALR)
     // Return (finished executing thread)
     output reg decoded_ret
 );
@@ -50,6 +50,7 @@ module decoder (
         STORE = 7'b0100011,          // RISC-V STORE:  STR (= `sw rs2, imm(rs1)`)
         BRANCH = 7'b1100011,         // RISC-V BRANCH: BEQ / BNE / BLT / BGE / BLTU / BGEU
         JAL = 7'b1101111,            // RISC-V JAL:    jump and link (PC relative)
+        JALR = 7'b1100111,           // RISC-V JALR:   jump and link (register + immediate)
         LUI = 7'b0110111,            // RISC-V LUI:    load upper immediate (imm[31:12])
         AUIPC = 7'b0010111,          // RISC-V AUIPC:  add upper immediate to PC
         CUSTOM2 = 7'b1011011;        // custom-2:      RET (thread finished executing)
@@ -88,6 +89,7 @@ module decoder (
             decoded_branch_enable <= 0;
             decoded_branch_cond <= 0;
             decoded_jump_enable <= 0;
+            decoded_jalr_enable <= 0;
             decoded_ret <= 0;
         end else begin 
             // Decode when core_state = DECODE
@@ -110,6 +112,7 @@ module decoder (
                 decoded_branch_enable <= 0;
                 decoded_branch_cond <= 0;
                 decoded_jump_enable <= 0;
+                decoded_jalr_enable <= 0;
                 decoded_ret <= 0;
 
                 // Set the control signals for each instruction (RISC-V style dispatch)
@@ -191,6 +194,16 @@ module decoder (
                         decoded_reg_write_enable <= 1;
                         decoded_reg_input_mux <= 2'b10; // link value comes from the PC unit
                         decoded_jump_enable <= 1;       // unconditional PC-relative jump
+                    end
+                    JALR: begin 
+                        // JALR rd, imm(rs1): rd = PC + 4, PC = (rs1 + imm)
+                        // The target address comes from a register, so it is computed by the
+                        // PC unit's adder (not the PC-relative one). funct3 must be 000.
+                        if (instruction[14:12] == F3_ADD_SUB_MUL) begin 
+                            decoded_reg_write_enable <= 1;
+                            decoded_reg_input_mux <= 2'b10; // link value comes from the PC unit
+                            decoded_jalr_enable <= 1;
+                        end
                     end
                     LUI: begin 
                         // LUI rd, imm20: rd = imm20 << 12 (upper 20 bits)

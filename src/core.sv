@@ -70,6 +70,7 @@ module core #(
     reg decoded_branch_enable;              // Branch (B-type) instruction
     reg [2:0] decoded_branch_cond;          // Branch condition (= funct3)
     reg decoded_jump_enable;                // Jump with link (J-type JAL)
+    reg decoded_jalr_enable;                // Jump with link, register target (I-type JALR)
     reg decoded_ret;
 
     // Fetcher
@@ -108,6 +109,7 @@ module core #(
         .decoded_branch_enable(decoded_branch_enable),
         .decoded_branch_cond(decoded_branch_cond),
         .decoded_jump_enable(decoded_jump_enable),
+        .decoded_jalr_enable(decoded_jalr_enable),
         .decoded_ret(decoded_ret)
     );
 
@@ -211,6 +213,7 @@ module core #(
                 .decoded_branch_enable(decoded_branch_enable),
                 .decoded_branch_cond(decoded_branch_cond),
                 .decoded_jump_enable(decoded_jump_enable),
+                .decoded_jalr_enable(decoded_jalr_enable),
                 .decoded_immediate(decoded_immediate),
                 .rs(rs[i]),
                 .rt(rt[i]),

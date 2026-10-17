@@ -8,8 +8,11 @@
 // > Control flow is RISC-V style and compares operands directly - there is no flag register:
 // >   `Bcc rs1, rs2, offset` -> PC + (offset >> 2) when taken, PC + 1 otherwise
 // >   `JAL rd, offset`      -> PC + (offset >> 2) unconditionally, PC + 4 goes to rd
+// >   `JALR rd, imm(rs1)`   -> (rs1 + imm) >> 2 unconditionally, PC + 4 goes to rd
 // >   `AUIPC rd, imm20`     -> PC + (imm20 << 12) goes to rd
-// > `pc_result` is the value written back to rd by JAL / AUIPC (`decoded_reg_input_mux = 10`)
+// > `pc_result` is the value written back to rd by JAL / JALR / AUIPC (`decoded_reg_input_mux = 10`)
+// > Only two adders per thread: one for the next PC, one shared by AUIPC (PC_byte + imm)
+// > and JALR (rs1 + imm). The link value is `(PC + 1) << 2`, i.e. pure wiring.
 module pc #(
     parameter DATA_MEM_DATA_BITS = 32,
     parameter PROGRAM_MEM_ADDR_BITS = 32
@@ -24,7 +27,8 @@ module pc #(
     // Control Signals
     input reg decoded_branch_enable,
     input reg [2:0] decoded_branch_cond, // funct3: 000 BEQ, 001 BNE, 100 BLT, 101 BGE, 110 BLTU, 111 BGEU
-    input reg decoded_jump_enable,       // JAL (unconditional jump + link)
+    input reg decoded_jump_enable,       // JAL (unconditional PC-relative jump + link)
+    input reg decoded_jalr_enable,       // JALR (unconditional register-target jump + link)
     input reg [PROGRAM_MEM_ADDR_BITS-1:0] decoded_immediate,
 
     // Operands to compare (rs1 / rs2)
@@ -76,22 +80,44 @@ module pc #(
     wire signed [PROGRAM_MEM_ADDR_BITS-1:0] offset_words;
     assign offset_words = imm_signed >>> 2;
 
-    // Branch or jump taken? JAL always jumps
-    wire take_transfer = decoded_jump_enable || (decoded_branch_enable && branch_take);
+    // Branch or jump taken? JAL / JALR always jump
+    wire take_transfer = decoded_jump_enable || decoded_jalr_enable ||
+                         (decoded_branch_enable && branch_take);
 
-    wire [PROGRAM_MEM_ADDR_BITS-1:0] next_pc_value;
-    assign next_pc_value = take_transfer ? (current_pc + offset_words) : (current_pc + 1);
-
-    // Link / PC-relative value written back to rd:
-    //   JAL   -> byte address of the next instruction (PC + 4)
-    //   AUIPC -> PC + (imm20 << 12)
+    // Shared adder: AUIPC needs `PC_byte + imm`, JALR needs `rs1 + imm`. Both are
+    // "something + the immediate", so one 32-bit adder per thread covers both.
     wire [PROGRAM_MEM_ADDR_BITS-1:0] pc_byte;
     assign pc_byte = current_pc << 2; // PC counts instructions, addresses count bytes
 
-    wire [PROGRAM_MEM_ADDR_BITS-1:0] pc_addend;
-    assign pc_addend = decoded_jump_enable ? 4 : decoded_immediate; // JAL: PC + 4
+    wire [PROGRAM_MEM_ADDR_BITS-1:0] base_or_reg;
+    assign base_or_reg = decoded_jalr_enable ? rs : pc_byte;
 
-    assign pc_result = pc_byte + pc_addend;
+    wire [PROGRAM_MEM_ADDR_BITS-1:0] base_plus_imm;
+    assign base_plus_imm = base_or_reg + decoded_immediate;
+
+    // JALR target: byte address -> instruction index. The shift also drops imm[1:0],
+    // i.e. RISC-V's `& ~1` plus the word alignment this machine needs.
+    wire [PROGRAM_MEM_ADDR_BITS-1:0] jalr_target;
+    assign jalr_target = base_plus_imm >>> 2;
+
+    // Byte address of the next instruction - no adder needed
+    wire [PROGRAM_MEM_ADDR_BITS-1:0] link_value;
+    assign link_value = (current_pc + 1) << 2;
+
+    // PC-relative target (branch / JAL)
+    wire [PROGRAM_MEM_ADDR_BITS-1:0] pc_relative_target;
+    assign pc_relative_target = current_pc + offset_words;
+
+    wire [PROGRAM_MEM_ADDR_BITS-1:0] transfer_target;
+    assign transfer_target = decoded_jalr_enable ? jalr_target : pc_relative_target;
+
+    wire [PROGRAM_MEM_ADDR_BITS-1:0] next_pc_value;
+    assign next_pc_value = take_transfer ? transfer_target : (current_pc + 1);
+
+    // Value written back to rd:
+    //   JAL / JALR -> byte address of the next instruction (PC + 4)
+    //   AUIPC       -> PC + (imm20 << 12)
+    assign pc_result = (decoded_jump_enable || decoded_jalr_enable) ? link_value : base_plus_imm;
 
     always @(posedge clk) begin
         if (reset) begin
