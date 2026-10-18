@@ -87,6 +87,14 @@ module alu #(
     assign rem_signed = rs_signed % operand_b;
     assign rem_unsigned = rs % operand_b_unsigned;
 
+    // INT_MIN / -1 is the one signed division whose true quotient (+2^31) does not
+    // fit in 32 bits.  Verilog leaves the result implementation-defined, and the
+    // simulators really do disagree (Icarus wraps to 0x80000000, Verilator returns
+    // 0), so pin it down to the RISC-V answer: quotient = INT_MIN, remainder = 0.
+    wire dividend_is_min = (rs == {1'b1, {DATA_BITS-1{1'b0}}});
+    wire divisor_is_minus1 = (operand_b == {DATA_BITS{1'b1}});
+    wire div_overflow = dividend_is_min && divisor_is_minus1;
+
     // Comparisons for SLT / SLTU.  `rs_signed < operand_b` is a signed compare
     // (both operands are declared signed), the other one is unsigned.  For SLTIU
     // the immediate is sign-extended by the decoder and then compared as unsigned,
@@ -112,16 +120,20 @@ module alu #(
                         alu_out_reg <= rs * operand_b;
                     end
                     DIV: begin 
-                        // RISC-V `div`: signed division, truncated toward zero; x/0 = -1
-                        alu_out_reg <= divisor_is_zero ? {DATA_BITS{1'b1}} : div_signed;
+                        // RISC-V `div`: signed division, truncated toward zero; x/0 = -1;
+                        // INT_MIN/-1 wraps back to INT_MIN
+                        alu_out_reg <= divisor_is_zero ? {DATA_BITS{1'b1}} :
+                            (div_overflow ? rs : div_signed);
                     end
                     DIVU: begin 
                         // RISC-V `divu`: unsigned division; x/0 = 2^32-1
                         alu_out_reg <= divisor_is_zero ? {DATA_BITS{1'b1}} : div_unsigned;
                     end
                     REM: begin 
-                        // RISC-V `rem`: sign follows the dividend; x%0 = x
-                        alu_out_reg <= divisor_is_zero ? rs : rem_signed;
+                        // RISC-V `rem`: sign follows the dividend; x%0 = x;
+                        // INT_MIN%-1 = 0 (the overflow case above)
+                        alu_out_reg <= divisor_is_zero ? rs :
+                            (div_overflow ? {DATA_BITS{1'b0}} : rem_signed);
                     end
                     REMU: begin 
                         // RISC-V `remu`: unsigned remainder; x%0 = x
