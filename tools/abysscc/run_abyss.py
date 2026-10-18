@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Small functional simulator for the Abyss ISA.
 
-Used to sanity-check programs produced by abysscc without running Verilator.
-It implements the Abyss instructions used by the tests, including the
-SLL/SRL/SRA and SLLI/SRLI/SRAI shifts, DIV/DIVU/REM/REMU,
+Used to sanity-check programs produced by the native Abyss Clang backend
+without running Verilator.  It implements the Abyss instructions used by the
+tests, including the SLL/SRL/SRA and SLLI/SRLI/SRAI shifts, DIV/DIVU/REM/REMU,
 SLT/SLTU/SLTI/SLTIU, and AND/OR/XOR/ANDI/ORI/XORI.  Data memory is byte-addressed:
 the simulator maps byte_address >> 2 to a word and uses byte lanes for
 LB/LH/LBU/LHU/SB/SH.

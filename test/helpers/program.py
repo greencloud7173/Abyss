@@ -58,7 +58,7 @@ def _find_binary(name: str, case: str | None = None) -> Path:
     for pattern in patterns:
         matches = sorted(REPO_ROOT.glob(pattern))
         if matches:
-            # Prefer the flat binary produced by `abysscc --raw`.
+            # Prefer the flat binary produced by the per-case Makefile.
             bins = [match for match in matches if match.suffix == ".bin"]
             return bins[0] if bins else matches[0]
 

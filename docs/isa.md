@@ -618,7 +618,7 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 
 | 项 | 改动前 | 现在 |
 | - | - | - |
-| 移位 | 没有;C 的 `<<` 只能靠 `MUL` 乘 2 的幂模拟(`riscv2abyss.py` 里明确写着 “slli by more than 3 is not supported”) | **`SLL`/`SRL`/`SRA`(R 型)+ `SLLI`/`SRLI`/`SRAI`(I 型)** |
+| 移位 | 没有;C 的 `<<` 只能靠 `MUL` 乘 2 的幂模拟(`riscv2abyss.py` 里明确写着 “slli by more than 3 is not supported”,该脚本已删除) | **`SLL`/`SRL`/`SRA`(R 型)+ `SLLI`/`SRLI`/`SRAI`(I 型)** |
 | ALU 操作码 | `decoded_alu_arithmetic_mux` 2 位(4 个操作) | **3 位**(7 个操作,`000`–`110`) |
 | ALU 数据通路 | 加 / 减 / 乘 / 除 | 多一个 32 位**桶形移位器**(`<<` / `>>` / `>>>`) |
 
@@ -629,7 +629,7 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 2. 移位量直接取 **B 操作数的低 5 位** —— R 型时 B = rs2,I 型时 B = 立即数(`decoded_alu_imm_enable` 已经切好),
    **没有新增 mux**。RISC-V 的 `mod 32` 语义因此天然成立(`SLL rd, rs1, r` 里 r = 33 只移 1 位)。
 3. 操作码扩到 3 位 → `alu.sv` / `decoder.sv` / `core.sv` 三处同步;前 4 个操作的编码值保持不变。
-4. 工具链:`tools/abysscc/riscv2abyss.py` 删掉 `slli → MUL` 的 hack,`sll/srl/sra/slli/srli/srai` 现在直通;
+4. 工具链:旧的 `tools/abysscc/riscv2abyss.py`(已删除)删掉 `slli → MUL` 的 hack,`sll/srl/sra/slli/srli/srai` 现在直通;
    `start.s` 里为那个 hack 预置的三个常量(R23/R27/R28)可以删掉。
 5. 代价:**每线程一个 32 位桶形移位器**(5 级 2:1 mux),这是本次唯一的实际面积开销。
 
@@ -668,7 +668,7 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
    现有内核的地址常量全部 ×4(`test/*/src/*.c` 的 `ABYSS_LD/ST` 基址已改)。
 2. `tools/abysscc/abyss.h` 的宏改回真正的指针运算(`((int*)base)[idx]`,由编译器用 `SLLI` 缩放),
    并新增 `ABYSS_LDB/LDH/STB/STH` 四个窄访问助手。
-3. C 语言现在可以做 `char`/`short` 和真正的字节指针演算;`riscv2abyss.py` 新增 `lb/lh/lbu/lhu/sb/sh` 直通。
+3. C 语言现在可以做 `char`/`short` 和真正的字节指针演算;旧翻译器(已删除)曾新增 `lb/lh/lbu/lhu/sb/sh` 直通。
 4. LSU 新增一组移位/掩码通路(读:lane 下移 + 扩展;写:数据上移 + 4 位掩码),每线程一份。
 
 ### 更名 + 手册迁址(2026-10)
@@ -683,7 +683,7 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 | 项 | 改动前 | 现在 |
 | - | - | - |
 | `AbyssInstrInfo.td` | 只有 `DIV`(`funct3 100`) | 补上 `DIVU`(`101`)、`REM`(`110`)、`REMU`(`111`),funct7 同为 `0000001` |
-| `riscv2abyss.py` 的 `%` | 展开成 `DIV` + `MUL` + `SUB`(占 `R26`) | **直通 `REM`/`REMU`**;`R26` 释放 |
+| `riscv2abyss.py` 的 `%`(脚本已删除) | 展开成 `DIV` + `MUL` + `SUB`(占 `R26`) | **直通 `REM`/`REMU`**;`R26` 释放 |
 | C 侧测试 | 无 | **`test/div`**:一次跑完 `a/b`、`a%b`、`ua/ub`、`ua%ub` 和四种除零情况(32 个断言)
  |
 
@@ -737,7 +737,7 @@ instruction mnemonic"。
 1. `alu.sv` 只加三条 `case` 分支(`rs & operand_b` 等),**没有新增硬件**。
 2. `decoder.sv` 把原来的 `F3_DIV`/`F3_REM`/`F3_REMU` 三个 `case` 项合并成
    `F3_XOR`/`F3_OR`/`F3_AND`,内部再用 `funct7` 分流 —— 代码反而更短,也更贴近 RISC-V 的真实布局。
-3. `riscv2abyss.py` 顺便补了几个 clang 会产出的 RISC-V 伪指令:`zext.b`(→ `ANDI #255`)、
+3. 旧翻译器(已删除)还顺便补了几个 clang 会产出的 RISC-V 伪指令:`zext.b`(→ `ANDI #255`)、
    `zext.h`(→ `SLLI 16` + `SRLI 16`)、`not`(→ `XORI #-1`)、`neg`(→ `SUB rd, x0, rs`)、
    `seqz`(→ `SLTIU #1`)、`snez`(→ `SLTU x0, rs`)。没有 `zext.b` 的话 `a & 0xFF` 直接编译不出来。
 4. 编码与 RISC-V 逐位一致:`AND R4,R1,R2 = 0x0020F233`、`OR R5,R1,R2 = 0x0020E2B3`、

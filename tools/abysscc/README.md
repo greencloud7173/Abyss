@@ -1,97 +1,31 @@
-# abysscc — 纯 Abyss Clang C 编译器
+# Abyss C 工具链与测试
 
-直接使用本仓库构建出的 `clang --target=abyss`：Clang 前端生成 LLVM IR，
-Abyss 后端直接发射 Abyss 汇编，再用 LLVM 的 Abyss MC 层汇编成 32 位目标文件。
-不再经过 RISC-V 前端或 `riscv2abyss.py`。
+当前测试不再使用 `abysscc` 或 `riscv2abyss.py`。每个 `test/<case>/` 目录都有自己的
+`Makefile`，直接使用本仓库构建出的原生 Abyss Clang：
 
 ```
-C 源码
-  │  clang --target=abyss -O2 -S
+test/<case>/src/<case>.c
+  │  clang --target=abyss -O2 -c
   ▼
-Abyss 汇编 (.kernel.abyss.s)
-  │  与 start.s 拼接
+build/<case>.o
+  │  ld.lld --image-base=0 -Ttext=0 -e _start  +  start.o
   ▼
-Abyss 汇编 (.abyss.s)
-  │  llvm-mc -arch=abyss -filetype=obj
+build/<case>.elf
+  │  llvm-objcopy -O binary --only-section=.text
   ▼
-Abyss ELF 目标文件 (.o)
+build/<case>.bin
+  │  cocotb + iverilog
+  ▼
+RTL 测试
 ```
 
-## 依赖
+`start.s` 由 `llvm-mc -arch=abyss` 单独汇编，然后与内核目标文件链接。
 
-- 本仓库构建出的 `build-abyss-clang/bin/clang`
-- 本仓库构建出的 `build/bin/llvm-mc`、`build/bin/llvm-objcopy`
-- 运行硬件测试时另需 `iverilog`、`cocotb`、`sv2v`（tiny-gpu 原有依赖）
-
-## 用法
-
-```bash
-cd /home/greencloud7173/tiny-gpu/tools/abysscc
-
-# 向量加法：8 个线程，2 个 block，每 block 4 线程
-./abysscc --start start_vecadd.s examples/vecadd.c -o /tmp/vecadd.o
-
-# 2x2 矩阵乘法：4 个线程，1 个 block
-./abysscc --start start_matmul.s examples/matmul.c -o /tmp/matmul.o
-
-# 位移测试（SLL/SRL/SRA/SLLI/SRLI/SRAI）
-./abysscc --start ../../test/shift/src/start.s --raw ../../test/shift/src/shift.c -o /tmp/shift.o
-
-# 字节/半字访存测试（LB/LBU/LH/LHU/SB/SH）
-./abysscc --start ../../test/mem/src/start.s --raw ../../test/mem/src/mem.c -o /tmp/mem.o
-
-# 除法测试（DIV/DIVU/REM/REMU）
-./abysscc --start ../../test/div/src/start.s --raw ../../test/div/src/div.c -o /tmp/div.o
-
-# SLT 测试（SLT/SLTU/SLTI/SLTIU）
-./abysscc --start ../../test/slt/src/start.s --raw ../../test/slt/src/slt.c -o /tmp/slt.o
-
-# 位逻辑测试（AND/OR/XOR/ANDI/ORI/XORI）
-./abysscc --start ../../test/logic/src/start.s --raw ../../test/logic/src/logic.c -o /tmp/logic.o
-
-# 加 --keep 保留中间汇编：
-./abysscc --start start_vecadd.s --keep examples/vecadd.c -o /tmp/vecadd.o
-# 生成 /tmp/vecadd.kernel.abyss.s、/tmp/vecadd.abyss.s
-
-# 加 --raw 额外输出纯 .text 二进制（小端 32 位字）：
-./abysscc --start start_matmul.s --raw examples/matmul.c -o /tmp/matmul.o
-# 生成 /tmp/matmul.o 和 /tmp/matmul.bin
-```
-
-`--start` 指定启动 stub。stub 负责：
-
-1. 设置 `sp`（示例用字节地址 `0x1000`）；
-2. 可选地设置内核参数（如 matmul 的 `N=2` 放在 `a0`/`R10`）；
-3. `JAL R1, kernel` 调用 C 内核；
-4. `RET` 结束该 block。
-
-内核的 `ret` 会通过 `JALR x0, 0(R1)` 返回到 stub 的 `RET`。
-
-## 功能验证
-
-功能模拟器（不依赖 Verilog）：
-
-```bash
-python3 run_abyss.py /tmp/vecadd.o --test vecadd
-python3 run_abyss.py /tmp/matmul.o --test matmul
-python3 run_abyss.py /tmp/shift.o --test shift
-python3 run_abyss.py /tmp/mem.o --test mem
-python3 run_abyss.py /tmp/div.o --test div
-python3 run_abyss.py /tmp/slt.o --test slt
-python3 run_abyss.py /tmp/logic.o --test logic
-# vecadd: got [0, 2, 4, ...], want [...], OK
-# matmul: got [7, 10, 15, 22], want [...], OK
-# shift: 六种移位形式全部匹配
-# mem: LB/LBU/LH/LHU/SB/SH 全部匹配
-# div: DIV/DIVU/REM/REMU 全部匹配
-# slt: SLT/SLTU/SLTI/SLTIU 全部匹配
-# logic: AND/OR/XOR + ANDI/ORI/XORI 全部匹配
-```
-
-真实硬件模型（cocotb + iverilog）：
+## 构建与运行
 
 ```bash
 cd /home/greencloud7173/tiny-gpu
+
 make test matadd
 make test matmul
 make test shift
@@ -99,94 +33,61 @@ make test mem
 make test div
 make test slt
 make test logic
-# 等价写法：make test_matadd / make test_matmul / make test_shift / make test_mem / make test_div / make test_slt / make test_logic
 ```
 
-测试会自动把 `test/<case>/src/<case>.c` 编译成
-`test/<case>/build/<case>.bin`，Python 入口只提供数据内存参数和二进制名，
-由 `test/helpers/program.py` 负责加载和运行。七个用例均通过。
+等价写法：
 
-## 文件说明
+```bash
+make test CASE=matadd
+make test_matadd
+make -C test/matadd
+```
+
+每个测试目录自行负责：
+
+- `build/<case>.o`：`clang --target=abyss` 编译 C
+- `build/start.o`：`llvm-mc` 汇编启动 stub
+- `build/<case>.elf`：`ld.lld` 链接
+- `build/<case>.bin`：提取 `.text`
+- 调用根目录的 `make sim` 构建共享 RTL 仿真器，再运行 cocotb
+
+测试产物位于 `test/<case>/build/`，已被 `.gitignore` 忽略。
+
+## 依赖
+
+- `build-abyss-clang/bin/clang`：只包含 Abyss target 的本地 Clang
+- `build/bin/llvm-mc`、`build/bin/llvm-objcopy`
+- `ld.lld`（LLD 22 可用）
+- `iverilog`、`cocotb`、`sv2v`
+
+路径可以在命令行覆盖，例如：
+
+```bash
+make -C test/matadd ABYSS_CLANG=/path/to/clang LLVM_MC=/path/to/llvm-mc
+```
+
+## 目录内容
 
 | 文件 | 作用 |
 | --- | --- |
-| `abysscc` | 驱动脚本：`clang --target=abyss` → `llvm-mc` |
-| `riscv2abyss.py` | 旧 RISC-V 翻译路线，已不参与构建（保留作参考） |
-| `abyss.h` | `blockIdx/blockDim/threadIdx` 访问和字节地址 `ABYSS_LD/ST` 宏（含 `ABYSS_LDB/LDBU/LDH/LDHU/STB/STH`） |
-| `start_vecadd.s` / `start_matmul.s` | 示例启动 stub |
-| `examples/vecadd.c` / `examples/matmul.c` | 示例 C 内核 |
-| `run_abyss.py` | Abyss 功能模拟器（含位移、窄访存、除法/SLT、位逻辑指令） |
-| `../../test/matadd/src/` / `../../test/matmul/src/` / `../../test/shift/src/` / `../../test/mem/src/` / `../../test/div/src/` / `../../test/slt/src/` / `../../test/logic/src/` | cocotb 测试用的 C 源码和启动 stub |
+| `abyss.h` | `blockIdx/blockDim/threadIdx` 访问以及字节地址 `ABYSS_LD/ST` 宏 |
+| `run_abyss.py` | 独立的 Abyss 功能模拟器，用于不跑 RTL 时快速检查 |
+| `examples/` | 示例 C 内核 |
+| `start_*.s` | 示例启动 stub |
 
-## C 语言子集与限制
+## C 语言子集
 
-当前目标是“能产生与测试例程功能相同的机器码”，不是完整的 C 环境。翻译器遇到
-不支持的指令会**报错**，不会静默生成错误代码。
+当前后端面向测试所需整数子集：
 
-### 必须注意
+- 支持 `int`/`unsigned`/`char`/`short`、算术、位运算、移位、除法/取余、比较、
+  分支、循环、`phi`、`select`、`alloca`、函数调用/返回。
+- 数据内存按字节寻址；窄访问使用 `ABYSS_LDB/LDBU/LDH/LDHU/STB/STH`。
+- 不支持浮点、64 位、全局变量、PIC、libc、可变参数；函数/调用参数最多 8 个。
+- 每个线程由后端按 `blockIdx * blockDim + threadIdx` 分配独立栈帧。
 
-- **数据内存按字节寻址**（与 RISC-V 一致）：字节 0..3 是字 0，`int *` 指针算术
-  可以正常用（编译器用 `SLLI` 缩放），基址写成字节偏移即可：
-  ```c
-  ABYSS_ST(64, i, ABYSS_LD(0, i) + ABYSS_LD(32, i));
-  ```
-- 字节/半字访问用 `ABYSS_LDB/LDBU/LDH/LDHU/STB/STH`（对应 `LB/LBU/LH/LHU/SB/SH`）。
-- 支持 `int`/`unsigned`/`char`/`short`；不要用 `long long`/浮点。窄类型建议通过
-  上面的宏显式访问（翻译器已支持 `lb/lh/lbu/lhu/sb/sh`）。
-- 位运算 `&`/`|`/`^`/`~` 已支持（`AND/OR/XOR` + `ANDI/ORI/XORI`）。移位：`<<`/`>>`
-  由 clang 按 C 类型选择 `SLL/SRL/SRA` 或 `SLLI/SRLI/SRAI`；移位量取低 5 位（mod 32）。
-- 无符号运算：`unsigned` 的 `/`、`%` 分别对应 `DIVU`/`REMU`（指令已就位）。
-  注意 `x/0`、`INT_MIN/-1` 在 C 里是 UB，硬件按 RISC-V 规则给出商全 1、余等于被除数。
-- 不支持全局变量、`la`、PIC、VLAs、可变参数、`libc`。数据由测试 harness 预先
-  放在约定的字节地址。
-- 函数调用：`call`/`tail` 会翻译成直接 `JAL`；`ret` 翻译成 `JALR x0, 0(ra)`。
-  嵌套调用由 clang 正常保存/恢复 `ra`，但被调用函数同样要遵守上述内存/类型限制。
-- 栈指针由 stub 设为字节地址 `0x1000`。clang 的栈偏移本来就是字节偏移，和当前
-  LSU 的字节寻址一致；只要栈区不与数据区重叠即可。
-
-### 已支持
-
-- `+ - * / %`（有符号与无符号）、位运算 `& | ^ ~`、比较、`if`、`for`/`while`、函数调用/返回
-- `ADDI`、`LDR`/`STR`（字）、`LB`/`LH`/`LBU`/`LHU`/`SB`/`SH`（字节/半字）、六种分支、`LUI`/`AUIPC`、`JAL`/`JALR`、`RET`
-- `SLL/SRL/SRA`（变量移位）和 `SLLI/SRLI/SRAI`（常量移位），移位量 mod 32
-- `slt`/`sltu`/`slti`/`sltiu` 直通（`.td` 已定义 `SLT`/`SLTU`/`SLTI`/`SLTIU`，不再展开成比较+分支）
-- `DIV`/`DIVU`/`REM`/`REMU` 直通（`.td` 已定义，`rem` 不再展开成三条指令）
-- `AND`/`OR`/`XOR` + `ANDI`/`ORI`/`XORI` 直通；clang 的伪指令 `zext.b`/`zext.h`/`not`/
-  `neg`/`seqz`/`snez` 也在翻译器里展开
-
-### 不支持（会明确报错）
-
-- 浮点、64 位、原子、压缩指令等
-
-## 寄存器约定
-
-Abyss 后端采用简单的“每个 SSA 值一个栈槽”策略，不依赖 LLVM 寄存器分配器：
-
-| 寄存器 | 用途 |
-| --- | --- |
-| `x0` | 恒 0 |
-| `R1` (`ra`) | 返回地址（每个函数入口保存到栈） |
-| `R2` (`sp`) | 栈指针（字节地址） |
-| `R5`/`R6`/`R7` | 后端临时寄存器 |
-| `R10-R17` (`a0-a7`) | 参数/返回值 |
-| `R29`/`R30`/`R31` | `%blockIdx` / `%blockDim` / `%threadIdx`（只读） |
-
-后端为每个线程分配独立的栈帧（基于 `blockIdx * blockDim + threadIdx`），避免
-多线程共享栈槽。`abyss.h` 仍用内联汇编读取 `x29/x30/x31`。
-
-## 检查生成的程序字
-
-用 `--raw` 可以直接得到 `.bin`；也可以手动提取来检查编码：
+## 功能模拟器
 
 ```bash
-/home/greencloud7173/llvm-project/build/bin/llvm-objcopy \
-  -O binary --only-section=.text /tmp/vecadd.o /tmp/vecadd.bin
-python3 - <<'PY'
-import struct
-raw = open('/tmp/vecadd.bin','rb').read()
-print(',\n'.join('0x%08X' % w for w in struct.unpack('<%dI' % (len(raw)//4), raw)))
-PY
+make -C test/matmul
+python3 tools/abysscc/run_abyss.py test/matmul/build/matmul.elf --test matmul
 ```
-
-测试现在直接加载 `.bin`（见 `test/helpers/program.py`），不需要再手工把程序字
-粘进 Python 文件。

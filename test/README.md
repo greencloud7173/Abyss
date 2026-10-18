@@ -99,17 +99,18 @@ make test_logic
 make test CASE=matadd
 ```
 
-`make test matadd` 会：
+`make test matadd` 会委托给 `test/matadd/Makefile`：
 
-1. 用 `tools/abysscc/abysscc --start test/matadd/src/start.s --raw ...`
-   把 `test/matadd/src/matadd.c` 编译成 `test/matadd/build/matadd.o` 和
-   `test/matadd/build/matadd.bin`；
-2. 构建共享 Verilog 模型 `build/gpu.v` 和 `build/sim.vvp`；它们和 cocotb 的
-   `results.xml` 一样留在仓库根目录（`build/` 与 `results.xml` 均已被忽略）；
-3. Python 入口通过 `test/helpers/program.py` 直接加载 `.bin`，不再内嵌机器码。
+1. 用 `clang --target=abyss -O2 -c` 编译 `src/matadd.c`，用
+   `llvm-mc -arch=abyss` 汇编 `src/start.s`；
+2. 用 `ld.lld --image-base=0 -Ttext=0 -e _start` 链接成
+   `test/matadd/build/matadd.elf`，再提取 `.bin`；
+3. 调用根目录的 `make sim` 构建共享 Verilog 模型 `build/gpu.v` 和
+   `build/sim.vvp`；
+4. Python 入口通过 `test/helpers/program.py` 直接加载 `.bin`。
 
-`test/<case>/build/` 只放 C 语言构建产物（`.o`、`.bin`，以及 `--keep` 时的中间
-汇编）；整个目录由 `.gitignore` 中的 `test/*/build/` 忽略。
+`test/<case>/build/` 只放该测试自己的产物（`.o`、`.elf`、`.bin`），整个目录由
+`.gitignore` 中的 `test/*/build/` 忽略。根目录 `build/` 仍只放 RTL 产物。
 
 ## 测试入口写法
 
