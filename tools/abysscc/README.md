@@ -48,6 +48,9 @@ cd /home/greencloud7173/tiny-gpu/tools/abysscc
 # SLT 测试（SLT/SLTU/SLTI/SLTIU）
 ./abysscc --start ../../test/slt/src/start.s --raw ../../test/slt/src/slt.c -o /tmp/slt.o
 
+# 位逻辑测试（AND/OR/XOR/ANDI/ORI/XORI）
+./abysscc --start ../../test/logic/src/start.s --raw ../../test/logic/src/logic.c -o /tmp/logic.o
+
 # 加 --keep 保留中间汇编：
 ./abysscc --start start_vecadd.s --keep examples/vecadd.c -o /tmp/vecadd.o
 # 生成 /tmp/vecadd.riscv.s、/tmp/vecadd.kernel.abyss.s、/tmp/vecadd.abyss.s
@@ -77,12 +80,14 @@ python3 run_abyss.py /tmp/shift.o --test shift
 python3 run_abyss.py /tmp/mem.o --test mem
 python3 run_abyss.py /tmp/div.o --test div
 python3 run_abyss.py /tmp/slt.o --test slt
+python3 run_abyss.py /tmp/logic.o --test logic
 # vecadd: got [0, 2, 4, ...], want [...], OK
 # matmul: got [7, 10, 15, 22], want [...], OK
 # shift: 六种移位形式全部匹配
 # mem: LB/LBU/LH/LHU/SB/SH 全部匹配
 # div: DIV/DIVU/REM/REMU 全部匹配
 # slt: SLT/SLTU/SLTI/SLTIU 全部匹配
+# logic: AND/OR/XOR + ANDI/ORI/XORI 全部匹配
 ```
 
 真实硬件模型（cocotb + iverilog）：
@@ -95,12 +100,13 @@ make test shift
 make test mem
 make test div
 make test slt
-# 等价写法：make test_matadd / make test_matmul / make test_shift / make test_mem / make test_div / make test_slt
+make test logic
+# 等价写法：make test_matadd / make test_matmul / make test_shift / make test_mem / make test_div / make test_slt / make test_logic
 ```
 
 测试会自动把 `test/<case>/src/<case>.c` 编译成
 `test/<case>/build/<case>.bin`，Python 入口只提供数据内存参数和二进制名，
-由 `test/helpers/program.py` 负责加载和运行。六个用例均通过。
+由 `test/helpers/program.py` 负责加载和运行。七个用例均通过。
 
 ## 文件说明
 
@@ -111,8 +117,8 @@ make test slt
 | `abyss.h` | `blockIdx/blockDim/threadIdx` 访问和字节地址 `ABYSS_LD/ST` 宏（含 `ABYSS_LDB/LDBU/LDH/LDHU/STB/STH`） |
 | `start_vecadd.s` / `start_matmul.s` | 示例启动 stub |
 | `examples/vecadd.c` / `examples/matmul.c` | 示例 C 内核 |
-| `run_abyss.py` | Abyss 功能模拟器（含位移、窄访存、除法/SLT 指令） |
-| `../../test/matadd/src/` / `../../test/matmul/src/` / `../../test/shift/src/` / `../../test/mem/src/` / `../../test/div/src/` / `../../test/slt/src/` | cocotb 测试用的 C 源码和启动 stub |
+| `run_abyss.py` | Abyss 功能模拟器（含位移、窄访存、除法/SLT、位逻辑指令） |
+| `../../test/matadd/src/` / `../../test/matmul/src/` / `../../test/shift/src/` / `../../test/mem/src/` / `../../test/div/src/` / `../../test/slt/src/` / `../../test/logic/src/` | cocotb 测试用的 C 源码和启动 stub |
 
 ## C 语言子集与限制
 
@@ -129,8 +135,8 @@ make test slt
 - 字节/半字访问用 `ABYSS_LDB/LDBU/LDH/LDHU/STB/STH`（对应 `LB/LBU/LH/LHU/SB/SH`）。
 - 支持 `int`/`unsigned`/`char`/`short`；不要用 `long long`/浮点。窄类型建议通过
   上面的宏显式访问（翻译器已支持 `lb/lh/lbu/lhu/sb/sh`）。
-- 不要用位运算 `& | ^`。移位已支持：`<<`/`>>` 由 clang 按 C 类型选择
-  `SLL/SRL/SRA` 或 `SLLI/SRLI/SRAI`；移位量取低 5 位（mod 32）。
+- 位运算 `&`/`|`/`^`/`~` 已支持（`AND/OR/XOR` + `ANDI/ORI/XORI`）。移位：`<<`/`>>`
+  由 clang 按 C 类型选择 `SLL/SRL/SRA` 或 `SLLI/SRLI/SRAI`；移位量取低 5 位（mod 32）。
 - 无符号运算：`unsigned` 的 `/`、`%` 分别对应 `DIVU`/`REMU`（指令已就位）。
   注意 `x/0`、`INT_MIN/-1` 在 C 里是 UB，硬件按 RISC-V 规则给出商全 1、余等于被除数。
 - 不支持全局变量、`la`、PIC、VLAs、可变参数、`libc`。数据由测试 harness 预先
@@ -142,15 +148,16 @@ make test slt
 
 ### 已支持
 
-- `+ - * / %`（有符号与无符号）、比较、`if`、`for`/`while`、函数调用/返回
+- `+ - * / %`（有符号与无符号）、位运算 `& | ^ ~`、比较、`if`、`for`/`while`、函数调用/返回
 - `ADDI`、`LDR`/`STR`（字）、`LB`/`LH`/`LBU`/`LHU`/`SB`/`SH`（字节/半字）、六种分支、`LUI`/`AUIPC`、`JAL`/`JALR`、`RET`
 - `SLL/SRL/SRA`（变量移位）和 `SLLI/SRLI/SRAI`（常量移位），移位量 mod 32
 - `slt`/`sltu`/`slti`/`sltiu` 直通（`.td` 已定义 `SLT`/`SLTU`/`SLTI`/`SLTIU`，不再展开成比较+分支）
 - `DIV`/`DIVU`/`REM`/`REMU` 直通（`.td` 已定义，`rem` 不再展开成三条指令）
+- `AND`/`OR`/`XOR` + `ANDI`/`ORI`/`XORI` 直通；clang 的伪指令 `zext.b`/`zext.h`/`not`/
+  `neg`/`seqz`/`snez` 也在翻译器里展开
 
 ### 不支持（会明确报错）
 
-- `andi/ori/xori/and/or/xor`（`andi sp, sp, -16` 作为对齐 no-op 被丢弃）
 - 浮点、64 位、原子、压缩指令等
 
 ## 寄存器约定

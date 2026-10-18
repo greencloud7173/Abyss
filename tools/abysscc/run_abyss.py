@@ -3,8 +3,8 @@
 
 Used to sanity-check programs produced by abysscc without running Verilator.
 It implements the Abyss instructions used by the tests, including the
-SLL/SRL/SRA and SLLI/SRLI/SRAI shifts, DIV/DIVU/REM/REMU, and
-SLT/SLTU/SLTI/SLTIU.  Data memory is byte-addressed:
+SLL/SRL/SRA and SLLI/SRLI/SRAI shifts, DIV/DIVU/REM/REMU,
+SLT/SLTU/SLTI/SLTIU, and AND/OR/XOR/ANDI/ORI/XORI.  Data memory is byte-addressed:
 the simulator maps byte_address >> 2 to a word and uses byte lanes for
 LB/LH/LBU/LHU/SB/SH.
 """
@@ -104,6 +104,12 @@ class Cpu:
                     self.wr(rd, 1 if i32(self.r[rs1]) < i32(self.r[rs2]) else 0)
                 elif funct3 == 3 and funct7 == 0:
                     self.wr(rd, 1 if u32(self.r[rs1]) < u32(self.r[rs2]) else 0)
+                elif funct3 == 7 and funct7 == 0:
+                    self.wr(rd, u32(self.r[rs1]) & u32(self.r[rs2]))
+                elif funct3 == 6 and funct7 == 0:
+                    self.wr(rd, u32(self.r[rs1]) | u32(self.r[rs2]))
+                elif funct3 == 4 and funct7 == 0:
+                    self.wr(rd, u32(self.r[rs1]) ^ u32(self.r[rs2]))
                 elif funct3 == 1 and funct7 == 0:
                     self.wr(rd, self.r[rs1] << (self.r[rs2] & 31))
                 elif funct3 == 5 and funct7 == 0:
@@ -121,6 +127,12 @@ class Cpu:
                     self.wr(rd, 1 if i32(self.r[rs1]) < imm_i else 0)
                 elif funct3 == 3:
                     self.wr(rd, 1 if u32(self.r[rs1]) < u32(imm_i) else 0)
+                elif funct3 == 7:
+                    self.wr(rd, u32(self.r[rs1]) & u32(imm_i))
+                elif funct3 == 6:
+                    self.wr(rd, u32(self.r[rs1]) | u32(imm_i))
+                elif funct3 == 4:
+                    self.wr(rd, u32(self.r[rs1]) ^ u32(imm_i))
                 elif funct3 == 1 and funct7 == 0:
                     self.wr(rd, self.r[rs1] << shamt)
                 elif funct3 == 5 and funct7 == 0:
@@ -225,7 +237,7 @@ def load_text(obj):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("obj")
-    ap.add_argument("--test", choices=["vecadd", "matmul", "shift", "mem", "div", "slt"], required=True)
+    ap.add_argument("--test", choices=["vecadd", "matmul", "shift", "mem", "div", "slt", "logic"], required=True)
     args = ap.parse_args()
 
     program = load_text(args.obj)
@@ -297,7 +309,7 @@ def main():
         got = []
         for base in (12, 16, 20, 24, 28, 32, 36, 40):
             got += [mem.get(base + i, 0) for i in range(4)]
-    else:  # slt
+    elif args.test == "slt":
         a = [0, 0xFFFFFFFF, 0x7FFFFFFF, 0x80000000]
         b = [0, 1, 0x7FFFFFFF, 0xFFFFFFFF]
         data = a + b
@@ -314,6 +326,26 @@ def main():
         want += [1 if u32(x) < 0xFFFFFFFF else 0 for x in a]
         got = []
         for base in (8, 12, 16, 20, 24, 28):
+            got += [mem.get(base + i, 0) for i in range(4)]
+    else:  # logic
+        a = [0x12345678, 0xFFFFFFFF, 0, 0x80000000]
+        b = [0xF0F0F0F0, 0x00FF00FF, 0xFFFFFFFF, 0x7FFFFFFF]
+        data = a + b
+        for i, v in enumerate(data):
+            mem[i] = v
+        for tid in range(4):
+            Cpu(program, mem, 0, 4, tid).run()
+        want = []
+        want += [u32(x) & u32(y) for x, y in zip(a, b)]
+        want += [u32(x) | u32(y) for x, y in zip(a, b)]
+        want += [u32(x) ^ u32(y) for x, y in zip(a, b)]
+        want += [u32(x) & 0xFF for x in a]
+        want += [u32(x) | 0x0F for x in a]
+        want += [u32(~u32(x)) for x in a]
+        want += [u32(x) & 0xFFFFFFF0 for x in a]
+        want += [(u32(x) >> 8) & 0xFF for x in a]
+        got = []
+        for base in (8, 12, 16, 20, 24, 28, 32, 36):
             got += [mem.get(base + i, 0) for i in range(4)]
 
     print(f"{args.test}: got {got}, want {want}, {'OK' if got == want else 'FAIL'}")

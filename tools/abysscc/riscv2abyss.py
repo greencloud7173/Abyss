@@ -121,6 +121,22 @@ def translate(text):
             out.append("ADDI x0, x0, #0")
         elif mnem == "ret":
             out.append("JALR x0, 0(R1)")
+        elif mnem == "zext.b":
+            # RISC-V pseudo-instruction: zero-extend the low byte
+            out.append(f"ANDI {reg(ops[0])}, {reg(ops[1])}, #255")
+        elif mnem == "zext.h":
+            # RISC-V pseudo-instruction: zero-extend the low half-word
+            rd, rs = reg(ops[0]), reg(ops[1])
+            out.append(f"SLLI {rd}, {rs}, 16")
+            out.append(f"SRLI {rd}, {rd}, 16")
+        elif mnem == "not":
+            out.append(f"XORI {reg(ops[0])}, {reg(ops[1])}, #-1")
+        elif mnem == "neg":
+            out.append(f"SUB {reg(ops[0])}, x0, {reg(ops[1])}")
+        elif mnem == "seqz":
+            out.append(f"SLTIU {reg(ops[0])}, {reg(ops[1])}, #1")
+        elif mnem == "snez":
+            out.append(f"SLTU {reg(ops[0])}, x0, {reg(ops[1])}")
         elif mnem == "j":
             out.append(f"JAL x0, {ops[0]}")
         elif mnem in ("call", "tail"):
@@ -142,10 +158,10 @@ def translate(text):
             else:  # bgtz
                 out.append(f"BLT x0, {rs}, {lab}")
         elif mnem in ("add", "sub", "mul", "div", "divu", "rem", "remu",
-                      "slt", "sltu"):
+                      "slt", "sltu", "and", "or", "xor"):
             rd, rs1, rs2 = (reg(x) for x in ops[:3])
             out.append(f"{mnem.upper()} {rd}, {rs1}, {rs2}")
-        elif mnem in ("slti", "sltiu"):
+        elif mnem in ("slti", "sltiu", "andi", "ori", "xori"):
             rd, rs1 = reg(ops[0]), reg(ops[1])
             out.append(f"{mnem.upper()} {rd}, {rs1}, #{parse_imm(ops[2])}")
         elif mnem == "addi":
@@ -197,10 +213,6 @@ def translate(text):
         elif mnem in ("sll", "srl", "sra"):
             rd, rs1, rs2 = (reg(x) for x in ops[:3])
             out.append(f"{mnem.upper()} {rd}, {rs1}, {rs2}")
-        elif mnem == "andi" and len(ops) == 3 and reg(ops[0]) == "R2" and \
-                parse_imm(ops[2]) == -16:
-            # SP starts 16-byte aligned and frame sizes are multiples of 16.
-            out.append("# dropped: andi sp, sp, -16")
         else:
             raise ValueError(f"unsupported instruction: {line}")
 

@@ -14,8 +14,8 @@
 - **定长 32 位指令**,格式与译码风格**对齐 RISC-V**;数据与地址 32 位;每个线程 32 个寄存器。
 - **执行模型(SIMD)**:一个 core 处理一个 block;block 内 4 个线程(`THREADS_PER_BLOCK`)共享 1 个 fetcher + 1 个 decoder,
   但每个线程各有独立的 ALU、LSU、PC、寄存器堆 —— 同一拍所有线程执行同一条指令。
-- **指令集**:37 条 —— R 型 12 条(`ADD` `SUB` `MUL` `DIV` `DIVU` `REM` `REMU` `SLT` `SLTU` `SLL` `SRL` `SRA`)、
-  I 型 12 条(`ADDI` `SLTI` `SLTIU` `LDR` `JALR` `SLLI` `SRLI` `SRAI` `LB` `LH` `LBU` `LHU`)、
+- **指令集**:43 条 —— R 型 15 条(`ADD` `SUB` `MUL` `DIV` `DIVU` `REM` `REMU` `SLT` `SLTU` `AND` `OR` `XOR` `SLL` `SRL` `SRA`)、
+  I 型 15 条(`ADDI` `SLTI` `SLTIU` `ANDI` `ORI` `XORI` `LDR` `JALR` `SLLI` `SRLI` `SRAI` `LB` `LH` `LBU` `LHU`)、
   S 型 3 条(`STR` `SB` `SH`)、
   B 型 6 条(`BEQ` `BNE` `BLT` `BGE` `BLTU` `BGEU`)、U 型 2 条(`LUI` `AUIPC`)、J 型 1 条(`JAL`)、GPU 专用 1 条(`RET`,也是 I 型编码)。
   除 `RET` 之外**全部与 RISC-V 官方编码逐位一致**(R/I/S/B/U/J 六种类型齐全)。
@@ -74,6 +74,9 @@
 | R | `SRA` | `0110011` | `101` | `0100000` | `SRA rd, rs1, rs2` | 同上(算术右移) | `sra` |
 | R | `SLT` | `0110011` | `010` | `0000000` | `SLT rd, rs1, rs2` | rd=0/1(`rs1 < rs2`,**有符号**) | `slt` |
 | R | `SLTU` | `0110011` | `011` | `0000000` | `SLTU rd, rs1, rs2` | rd=0/1(`rs1 < rs2`,**无符号**) | `sltu` |
+| R | `AND` | `0110011` | `111` | `0000000` | `AND rd, rs1, rs2` | rd, rs1, rs2(逐位与) | `and` |
+| R | `OR` | `0110011` | `110` | `0000000` | `OR rd, rs1, rs2` | 同上(逐位或) | `or` |
+| R | `XOR` | `0110011` | `100` | `0000000` | `XOR rd, rs1, rs2` | 同上(逐位异或) | `xor` |
 | I | `LDR` | `0000011` | `010` | — | `LDR rd, imm(rs1)` | rd, rs1, imm12 字节偏移 | `lw rd, imm(rs1)` |
 | I | `LB` | `0000011` | `000` | — | `LB rd, imm(rs1)` | 同上(取 1 字节,符号扩展) | `lb` |
 | I | `LH` | `0000011` | `001` | — | `LH rd, imm(rs1)` | 同上(取 2 字节,符号扩展) | `lh` |
@@ -85,6 +88,9 @@
 | I | `ADDI` | `0010011` | `000` | — | `ADDI rd, rs1, #imm12` | rd, rs1, imm12(符号扩展) | `addi` |
 | I | `SLTI` | `0010011` | `010` | — | `SLTI rd, rs1, #imm12` | rd=0/1(`rs1 < 符号扩展(imm12)`,**有符号**) | `slti` |
 | I | `SLTIU` | `0010011` | `011` | — | `SLTIU rd, rs1, #imm12` | rd=0/1(imm **符号扩展后当无符号**比) | `sltiu` |
+| I | `ANDI` | `0010011` | `111` | — | `ANDI rd, rs1, #imm12` | rd ← rs1 & 符号扩展(imm12) | `andi` |
+| I | `ORI` | `0010011` | `110` | — | `ORI rd, rs1, #imm12` | rd ← rs1 \| 符号扩展(imm12) | `ori` |
+| I | `XORI` | `0010011` | `100` | — | `XORI rd, rs1, #imm12` | rd ← rs1 ^ 符号扩展(imm12);`#-1` 即 `not` | `xori` |
 | I | `SLLI` | `0010011` | `001` | —(imm[11:5]=`0000000`) | `SLLI rd, rs1, shamt` | rd, rs1, `imm[4:0]` = 移位量 | `slli` |
 | I | `SRLI` | `0010011` | `101` | —(imm[11:5]=`0000000`) | `SRLI rd, rs1, shamt` | 同上(逻辑右移) | `srli` |
 | I | `SRAI` | `0010011` | `101` | —(imm[11:5]=`0100000`) | `SRAI rd, rs1, shamt` | 同上(算术右移) | `srai` |
@@ -166,8 +172,13 @@ RISC-V 保留的 custom 段分配(便于将来扩展,均已避开官方指令编
 | `101` | `0100000` | `SRA` | `SRA rd, rs1, rs2` | `rd ← rs1 >>> rs2[4:0]`(**算术**,带符号) | `reg_write=1`,`reg_input_mux=00`,`alu_mux=110` |
 | `010` | `0000000` | `SLT` | `SLT rd, rs1, rs2` | `rd ← (rs1 < rs2) ? 1 : 0`(**有符号**比较) | `reg_write=1`,`reg_input_mux=00`,`alu_mux=1010` |
 | `011` | `0000000` | `SLTU` | `SLTU rd, rs1, rs2` | `rd ← (rs1 < rs2) ? 1 : 0`(**无符号**比较) | `reg_write=1`,`reg_input_mux=00`,`alu_mux=1011` |
+| `111` | `0000000` | `AND` | `AND rd, rs1, rs2` | `rd ← rs1 & rs2` | `reg_write=1`,`reg_input_mux=00`,`alu_mux=1100` |
+| `110` | `0000000` | `OR` | `OR rd, rs1, rs2` | `rd ← rs1 \| rs2` | `reg_write=1`,`reg_input_mux=00`,`alu_mux=1101` |
+| `100` | `0000000` | `XOR` | `XOR rd, rs1, rs2` | `rd ← rs1 ^ rs2` | `reg_write=1`,`reg_input_mux=00`,`alu_mux=1110` |
 
-`ADD`/`SUB`/`MUL`/`DIV`/`SLT`/`SLTU` 的编码与 RISC-V 官方一致(含 M 扩展的 `funct7=0000001`)。
+`ADD`/`SUB`/`MUL`/`DIV`/`SLT`/`SLTU`/`AND`/`OR`/`XOR` 的编码与 RISC-V 官方一致(含 M 扩展的 `funct7=0000001`)。
+❗`funct3` 的 `100`/`110`/`111` 是与 `DIV`/`REM`/`REMU` **共用**的,靠 `funct7` 区分:
+`0000000` = 逻辑运算,`0000001` = M 扩展的除/余。
 
 ### 4.2 B 型条件分支(opcode `1100011` = RISC-V BRANCH)
 
@@ -233,6 +244,9 @@ RISC-V 保留的 custom 段分配(便于将来扩展,均已避开官方指令编
 | `0010011` | `101` | `SRLI` / `SRAI` | `SRLI/SRAI rd, rs1, shamt` | `rd ← rs1 >> shamt` / `rd ← rs1 >>> shamt` | 同上,`alu_mux=101` / `110`,靠 `imm[11:5]`(`0000000` / `0100000`)区分 |
 | `0010011` | `010` | `SLTI` | `SLTI rd, rs1, #imm12` | `rd ← (rs1 < imm) ? 1 : 0`(**有符号**) | `reg_write=1`,`reg_input_mux=00`,`alu_mux=1010`,`alu_imm_enable=1` |
 | `0010011` | `011` | `SLTIU` | `SLTIU rd, rs1, #imm12` | `rd ← (rs1 < imm) ? 1 : 0`(**无符号**,imm 先符号扩展) | 同上,`alu_mux=1011` |
+| `0010011` | `111` | `ANDI` | `ANDI rd, rs1, #imm12` | `rd ← rs1 & imm` | `reg_write=1`,`reg_input_mux=00`,`alu_mux=1100`,`alu_imm_enable=1` |
+| `0010011` | `110` | `ORI` | `ORI rd, rs1, #imm12` | `rd ← rs1 \| imm` | 同上,`alu_mux=1101` |
+| `0010011` | `100` | `XORI` | `XORI rd, rs1, #imm12` | `rd ← rs1 ^ imm`(`#-1` = `not`) | 同上,`alu_mux=1110` |
 
 - `ADDI` 把 ALU 的 B 操作数从 `rs2` 切到符号扩展后的 `imm12`(`decoded_alu_imm_enable`,ALU 内部一个 2:1 mux),运算仍是 ADD。
   `ADDI rd, x0, #imm` 就是伪指令 `LI rd, #imm`;`ADDI x0, x0, #0` 就是 `NOP`(写入 x0 被忽略,所以真的什么都不做)。
@@ -264,6 +278,7 @@ RISC-V 保留的 custom 段分配(便于将来扩展,均已避开官方指令编
 | `STR` `SB` `SH` | `REQUEST` 采样 rs1(基址)、rs2(数据) | 同上;写数据移位到 lane,并带 4 位字节掩码 | — |
 | `ADDI` | `REQUEST` 采样 rs1 | `EXECUTE` ALU 加立即数 | `UPDATE` 写 rd |
 | `SLT` `SLTU` `SLTI` `SLTIU` | `REQUEST` 采样 rs1、rs2(或立即数) | `EXECUTE` ALU 比较,得出 0/1 | `UPDATE` 写 rd |
+| `AND` `OR` `XOR` `ANDI` `ORI` `XORI` | `REQUEST` 采样 rs1、rs2(或立即数) | `EXECUTE` ALU 逐位运算 | `UPDATE` 写 rd |
 | `LUI` | 无需读(rs1 强指 `x0`) | `EXECUTE` ALU 加 `imm20<<12` | `UPDATE` 写 rd |
 | `AUIPC` | — | `EXECUTE` PC 单元算 `PC + imm` | `UPDATE` 写 rd |
 | `JAL` | — | `EXECUTE` 算目标 PC | `UPDATE` 写 rd(链接值)**并**改 PC |
@@ -351,6 +366,7 @@ J 型:instr = (imm[20] << 31) | (imm[10:1] << 21) | (imm[11] << 20) | (imm[19:12
 | `DIVU/REM/REMU` | `divu/rem/remu` | ✅(funct3 `101`/`110`/`111` + funct7 `0000001`) |
 | `SLL/SRL/SRA` | `sll/srl/sra` | ✅ |
 | `SLT/SLTU` / `SLTI/SLTIU` | `slt/sltu` / `slti/sltiu` | ✅(funct3 `010`/`011` 完全一致) |
+| `AND/OR/XOR` / `ANDI/ORI/XORI` | `and/or/xor` / `andi/ori/xori` | ✅(funct3 `111`/`110`/`100` + funct7 `0000000`) |
 | `SLLI/SRLI/SRAI` | `slli/srli/srai` | ✅(imm[11:5] 的 0000000 / 0100000 完全一致) |
 | `ADDI rd, rs1, #imm` | `addi rd, rs1, imm` | ✅ |
 | `LDR rd, imm(rs1)` | `lw rd, imm(rs1)` | ✅ |
@@ -400,6 +416,12 @@ J 型:instr = (imm[20] << 31) | (imm[10:1] << 21) | (imm[11] << 20) | (imm[19:12
 | `SLTU R5, R1, R2` | **0x0020B2B3** |
 | `SLTI R6, R1, #5` | **0x0050A313** |
 | `SLTIU R7, R1, #-1`(即 `R1 < 0xFFFFFFFF` 无符号) | **0xFFF0B393** |
+| `AND R4, R1, R2` | **0x0020F233** |
+| `OR R5, R1, R2` | **0x0020E2B3** |
+| `XOR R6, R1, R2` | **0x0020C333** |
+| `ANDI R7, R1, #255` | **0x0FF0F393** |
+| `ORI R8, R1, #15` | **0x00F0E413** |
+| `XORI R9, R1, #-1`(=`NOT R9, R1`) | **0xFFF0C493** |
 | `LUI R1, 0x12345` | **0x123450B7** |
 | `AUIPC R2, 0x00000` | **0x00000117** |
 | `AUIPC R5, 0x00001` | **0x00001297** |
@@ -699,6 +721,30 @@ instruction mnemonic"。
    `SLTI R6,R1,#5 = 0x0050A313`、`SLTIU R7,R1,#-1 = 0xFFF0B393`。
 5. 至此 RISC-V **RV32I + M** 的整数部分只剩 `AND/OR/XOR` 与 `ANDI/ORI/XORI` 没做。
 
+### 位运算补齐:`AND` / `OR` / `XOR` + 立即数版(2026-10)
+
+| 项 | 改动前 | 现在 |
+| - | - | - |
+| 逻辑指令 | **没有**;`&`/`\|`/`^` 在翻译器里直接报 "unsupported" | **`AND`/`OR`/`XOR`**(R 型 `funct3 111/110/100`)+ **`ANDI`/`ORI`/`XORI`**(I 型同 funct3) |
+| `funct3` 复用 | `100/110/111` 只给 `DIV`/`REM`/`REMU` 用 | **共用**:`funct7=0000000` 是逻辑运算,`0000001` 是除/余(和 RISC-V 一致) |
+| ALU 操作码 | 4 位,12 个操作(`0000`–`1011`) | **仍是 4 位**,15 个操作(加 `1100` AND / `1101` OR / `1110` XOR) |
+| 写回通路 | — | **不变**:仍走 `reg_input_mux=00` |
+| 编译器侧 `&`/`\|`/`^` | 直接报错 | 直通;`andi sp, sp, -16` 的对齐 no-op 特例也删了(现在是真指令) |
+| C 侧测试 | 无 | **`test/logic`**:`&`/`\|`/`^`、`ANDI #255`、`ORI #15`、`~a`(=`XORI #-1`)、`& -16`、位域提取,共 32 个断言 |
+
+影响:
+
+1. `alu.sv` 只加三条 `case` 分支(`rs & operand_b` 等),**没有新增硬件**。
+2. `decoder.sv` 把原来的 `F3_DIV`/`F3_REM`/`F3_REMU` 三个 `case` 项合并成
+   `F3_XOR`/`F3_OR`/`F3_AND`,内部再用 `funct7` 分流 —— 代码反而更短,也更贴近 RISC-V 的真实布局。
+3. `riscv2abyss.py` 顺便补了几个 clang 会产出的 RISC-V 伪指令:`zext.b`(→ `ANDI #255`)、
+   `zext.h`(→ `SLLI 16` + `SRLI 16`)、`not`(→ `XORI #-1`)、`neg`(→ `SUB rd, x0, rs`)、
+   `seqz`(→ `SLTIU #1`)、`snez`(→ `SLTU x0, rs`)。没有 `zext.b` 的话 `a & 0xFF` 直接编译不出来。
+4. 编码与 RISC-V 逐位一致:`AND R4,R1,R2 = 0x0020F233`、`OR R5,R1,R2 = 0x0020E2B3`、
+   `XOR R6,R1,R2 = 0x0020C333`、`ANDI R7,R1,#255 = 0x0FF0F393`、
+   `ORI R8,R1,#15 = 0x00F0E413`、`XORI R9,R1,#-1 = 0xFFF0C493`。
+5. 至此 **RV32I + M 的整数指令全部齐全**(除 `FENCE`/`ECALL`/`EBREAK` 这类系统指令)。
+
 ## 11. 与 RTL 的对应关系
 
 | 手册里的概念 | RTL 位置 |
@@ -718,7 +764,7 @@ instruction mnemonic"。
 | - | - | - |
 | `decoded_reg_input_mux` | `00` ALU / `01` LSU / `10` PC 单元 | 选择写回 rd 的数据来源(`LUI` 用 `00`,`JAL`/`AUIPC` 用 `10`) |
 | `decoded_alu_imm_enable` | `1` | ALU 的 B 操作数改用立即数(`ADDI` / `LUI`) |
-| `decoded_alu_arithmetic_mux` | `0000` ADD / `0001` SUB / `0010` MUL / `0011` DIV / `0100` SLL / `0101` SRL / `0110` SRA / `0111` DIVU / `1000` REM / `1001` REMU / `1010` SLT / `1011` SLTU | ALU 运算选择(4 位;移位量取 B 操作数低 5 位) |
+| `decoded_alu_arithmetic_mux` | `0000` ADD / `0001` SUB / `0010` MUL / `0011` DIV / `0100` SLL / `0101` SRL / `0110` SRA / `0111` DIVU / `1000` REM / `1001` REMU / `1010` SLT / `1011` SLTU / `1100` AND / `1101` OR / `1110` XOR | ALU 运算选择(4 位;移位量取 B 操作数低 5 位) |
 | `decoded_branch_enable` | `1` | PC 走分支逻辑(B 型) |
 | `decoded_branch_cond` | `= funct3` | 选择分支条件(`000` BEQ / `001` BNE / `100` BLT / `101` BGE / `110` BLTU / `111` BGEU) |
 | `decoded_jump_enable` | `1` | 无条件跳转 + 链接(`JAL`) |

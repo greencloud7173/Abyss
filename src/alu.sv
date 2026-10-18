@@ -15,6 +15,8 @@
 // > propagating `x` through the datapath
 // > Comparisons (SLT / SLTU, and their immediate forms SLTI / SLTIU) also land here:
 // > they write 0 or 1 into rd, so no extra write-back path is needed
+// > Bitwise logic (AND / OR / XOR and ANDI / ORI / XORI) shares the same B operand mux,
+// > which is why the immediate forms come for free
 module alu #(
     parameter DATA_BITS = 8
 ) (
@@ -43,7 +45,10 @@ module alu #(
         REM = 4'b1000,   // signed remainder
         REMU = 4'b1001,  // unsigned remainder
         SLT = 4'b1010,   // set less than (signed)   -> rd = (rs < rs2/imm) ? 1 : 0
-        SLTU = 4'b1011;  // set less than (unsigned) -> rd = (rs < rs2/imm) ? 1 : 0
+        SLTU = 4'b1011,  // set less than (unsigned) -> rd = (rs < rs2/imm) ? 1 : 0
+        AND = 4'b1100,   // bitwise and
+        OR = 4'b1101,    // bitwise or
+        XOR = 4'b1110;   // bitwise xor
 
     reg [DATA_BITS-1:0] alu_out_reg;
     assign alu_out = alu_out_reg;
@@ -141,6 +146,18 @@ module alu #(
                     SLTU: begin 
                         // rd = 1 when rs < B (unsigned), else 0
                         alu_out_reg <= {{DATA_BITS-1{1'b0}}, rs_less_unsigned};
+                    end
+                    AND: begin 
+                        // Bitwise AND / ANDI (immediate is sign-extended by the decoder)
+                        alu_out_reg <= rs & operand_b;
+                    end
+                    OR: begin 
+                        // Bitwise OR / ORI
+                        alu_out_reg <= rs | operand_b;
+                    end
+                    XOR: begin 
+                        // Bitwise XOR / XORI (`XORI rd, rs1, #-1` is the `not` pseudo-instruction)
+                        alu_out_reg <= rs ^ operand_b;
                     end
                 endcase
             end

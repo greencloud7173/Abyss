@@ -64,6 +64,15 @@ test/
     build/
       slt.o
       slt.bin
+  logic/
+    __init__.py
+    test_logic.py
+    src/
+      logic.c
+      start.s
+    build/
+      logic.o
+      logic.bin
 ```
 
 ## 运行
@@ -77,6 +86,7 @@ make test shift
 make test mem
 make test div
 make test slt
+make test logic
 
 # 等价写法
 make test_matadd
@@ -85,6 +95,7 @@ make test_shift
 make test_mem
 make test_div
 make test_slt
+make test_logic
 make test CASE=matadd
 ```
 
