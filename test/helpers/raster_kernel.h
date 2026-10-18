@@ -82,7 +82,7 @@ _Static_assert(RASTER_PIXELS > 0, "raster size must be positive");
 _Static_assert(RASTER_THREADS > 0 && RASTER_THREADS <= 255,
                "raster thread count must fit the 8-bit dispatch register");
 _Static_assert(RASTER_THREADS % 8 == 0,
-               "raster thread count must be a multiple of the 8-thread block");
+               "raster thread count must be a multiple of the block size");
 _Static_assert(RASTER_PIXELS % RASTER_THREADS == 0,
                "raster threads must divide the pixel count (uniform loop)");
 

@@ -186,8 +186,14 @@ async def run_case(
     program_memory = Memory(
         dut=dut, addr_bits=32, data_bits=32, channels=1, name="program"
     )
+    # Data memory channel count follows the RTL (`DATA_MEM_NUM_CHANNELS`) instead
+    # of being hard-coded, so widening the SIMD only needs the gpu.sv parameter.
+    try:
+        data_channels = len(dut.data_mem_read_valid)
+    except TypeError:
+        data_channels = len(str(dut.data_mem_read_valid.value))
     data_memory = Memory(
-        dut=dut, addr_bits=32, data_bits=32, channels=4, name="data"
+        dut=dut, addr_bits=32, data_bits=32, channels=data_channels, name="data"
     )
 
     await setup(

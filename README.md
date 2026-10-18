@@ -9,7 +9,7 @@
 
 | 层 | 内容 |
 | - | - |
-| RTL | SystemVerilog，4 个 core × 8 线程，每线程独立的 ALU / LSU / PC / 寄存器堆 |
+| RTL | SystemVerilog，4 个 core × 16 线程，每线程独立的 ALU / LSU / PC / 寄存器堆 |
 | ISA | 43 条指令，RV32I + M 兼容（仅 `RET` 为自定义），32 位定长编码 |
 | 编译器 | `clang --target=abyss`（LLVM 22 后端 + Clang target），`ld.lld` 链接 |
 | 验证 | cocotb + iverilog，整数与多分辨率光栅化 C 内核用例，逐拍执行 trace |
@@ -94,7 +94,7 @@ gds/                  GDSII 布局结果
 
 ![GPU](docs/images/gpu.png)
 
-一个 GPU 由 **4 个 core** 组成，每个 core 负责一个 block、最多 **8 个线程**（`THREADS_PER_BLOCK`）。
+一个 GPU 由 **4 个 core** 组成，每个 core 负责一个 block、最多 **16 个线程**（`THREADS_PER_BLOCK`）。
 同一 core 内的线程**共享一个 fetcher 和一个 decoder**，但各自拥有独立的 ALU、LSU、PC 和寄存器堆 ——
 这就是 SIMD 在硬件上的样子：一条指令，多个数据通路同时执行。
 
