@@ -12,7 +12,7 @@
 | RTL | SystemVerilog，4 个 core × 16 线程，每线程独立的 ALU / LSU / PC / 寄存器堆 |
 | ISA | 43 条指令，RV32I + M 兼容（仅 `RET` 为自定义），32 位定长编码 |
 | 编译器 | `clang --target=abyss`（LLVM 22 后端 + Clang target），`ld.lld` 链接 |
-| 验证 | cocotb + iverilog，整数与多分辨率光栅化 C 内核用例，逐拍执行 trace |
+| 验证 | cocotb + Icarus Verilog / **Verilator**，整数与多分辨率光栅化 C 内核用例，逐拍执行 trace |
 
 
 ---
@@ -34,7 +34,7 @@
 ## 快速开始
 
 ```bash
-# 依赖：iverilog、sv2v、cocotb(+python3)、ld.lld
+# 依赖：iverilog、sv2v、cocotb(+python3)、ld.lld；可选 Verilator（快 5×）
 # 编译器与汇编器来自本机的 LLVM 构建（见「C 工具链」一节）
 
 make test matadd      # 跑单个用例
@@ -233,7 +233,25 @@ void kernel(void) {
 | `slt` | `SLT`/`SLTU`/`SLTI`/`SLTIU`，含负立即数与无符号比较 |
 | `logic` | `AND`/`OR`/`XOR` 与立即数版、`~a`、位域提取 |
 
-全部用例通过（cocotb 2.1 + Icarus Verilog 13），sv2v 与 iverilog 零告警。
+全部用例通过（cocotb 2.1，Icarus Verilog 13 与 Verilator 5.046 两套后端结果一致），sv2v 与 iverilog 零告警。
+
+### 仿真器选择
+
+`make test <case>` 默认走 iverilog；加 `SIM=verilator` 换成 Verilator，**同一拍数、快 5 倍以上**：
+
+| 用例 | icarus | verilator |
+| - | - | - |
+| `raster128x128` | 108 s | **20 s** |
+| `raster32x32` | 6.1 s | 2.6 s |
+| `matadd` | 1.6 s | 0.8 s |
+
+```bash
+make test raster128x128 SIM=verilator
+```
+
+Verilator 的安装（无需 root）与变量覆盖见 [`test/README.md`](test/README.md)。
+❗ 两个仿真器对 `INT_MIN / -1` 这种有符号除法溢出的定义不同（Icarus 回绕成 `0x80000000`，
+Verilator 给 `0`），`alu.sv` 现在把该情况显式钉成 RISC-V 语义。
 仿真可以在 `test/logs/` 里看到逐拍 trace：
 
 ![execution trace](docs/images/trace.png)

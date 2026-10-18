@@ -552,7 +552,7 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 | 向 `R29`–`R31` 写(`rd >= 29`) | 静默忽略,不产生写动作 |
 | `DIV`/`DIVU` 且 `rs2 == 0` | 返回全 1(`−1` / `0xFFFFFFFF`),不再传播 `x`(2026-10 起对齐 RISC-V) |
 | `REM`/`REMU` 且 `rs2 == 0` | 返回**被除数**(RISC-V 语义) |
-| `DIV`/`REM` 且 `rs1 = INT_MIN, rs2 = −1` | 商回绕成 `INT_MIN`,余数 0(两补码除法溢出) |
+| `DIV`/`REM` 且 `rs1 = INT_MIN, rs2 = −1` | 商回绕成 `INT_MIN`,余数 0(两补码除法溢出)。⚠️ 这是 Verilog 的**实现相关**行为:同一份 `rs_signed / operand_b` 在 Icarus 下回绕成 `0x80000000`、在 Verilator 下给 `0`,所以 `alu.sv` 显式判断 `dividend_is_min && divisor_is_minus1`,不依赖仿真器 |
 | 读未初始化 / 越界的数据内存 | 测试的 `Memory` 是稀疏 `defaultdict(int)`,读到 0 |
 | 分支目标超出程序长度 | 取到全 0(NOP)后继续顺序执行,不 trap |
 | B/J 型偏移不是 4 的倍数 | 低两位被右移丢弃(硬件只取 `imm >>> 2`),等价于向下取整到 4 的倍数 |

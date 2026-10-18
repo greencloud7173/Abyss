@@ -33,6 +33,22 @@ export LIBPYTHON_LOC := $(shell cocotb-config --libpython)
 export PYGPI_PYTHON_BIN := $(shell cocotb-config --python-bin)
 export GPI_USERS := $(LIBPYTHON_LOC);$(shell cocotb-config --pygpi-entry-point)
 
+# ---------------------------------------------------------------------------
+# Simulator selection
+#   SIM=icarus     (默认) iverilog + vvp
+#   SIM=verilator  Verilator 5.x + cocotb VPI,同一拍快 5~20 倍
+#   make test raster128x128 SIM=verilator
+# ---------------------------------------------------------------------------
+SIM ?= icarus
+
+VERILATOR ?= $(HOME)/.local/verilator/usr/bin/verilator_bin
+VERILATOR_ROOT ?= $(HOME)/.local/verilator/usr/share/verilator
+VLT_BUILD ?= $(ROOT)/build/vsim
+COCOTB_SHARE := $(shell python3 -m cocotb_tools.config --share)
+COCOTB_LIBDIR := $(shell python3 -m cocotb_tools.config --lib-dir)
+VLT_CPP := $(COCOTB_SHARE)/lib/verilator/verilator.cpp
+VLT_TOP := $(VLT_BUILD)/Vtop
+
 .PHONY: all test compile clean
 
 all: test
@@ -56,10 +72,30 @@ $(BIN): $(ELF)
 
 compile: $(BIN)
 
+ifeq ($(SIM),verilator)
+# Verilator model of the whole GPU, shared by every test case (build/vsim).
+# `--public-flat-rw` lets cocotb reach internal signals through VPI;
+# `verilator.cpp` from cocotb drives cocotb's own scheduler.
+$(ROOT)/build/gpu.v: $(wildcard $(ROOT)/src/*.sv)
+	$(MAKE) -C $(ROOT) compile
+
+$(VLT_TOP): $(ROOT)/build/gpu.v $(VLT_CPP)
+	VERILATOR_ROOT=$(VERILATOR_ROOT) $(VERILATOR) -cc --exe -Mdir $(VLT_BUILD) \
+		--top-module gpu --vpi --public-flat-rw --prefix Vtop -o Vtop \
+		-Wno-fatal -Wno-PINMISSING -Wno-lint \
+		-LDFLAGS "-Wl,-rpath,$(COCOTB_LIBDIR) -L$(COCOTB_LIBDIR) -lcocotbvpi_verilator" \
+		$(ROOT)/build/gpu.v $(VLT_CPP)
+	$(MAKE) -C $(VLT_BUILD) -f Vtop.mk -j$(shell nproc)
+
+test: $(BIN) $(VLT_TOP)
+	cd $(ROOT) && env COCOTB_TEST_MODULES=test.$(CASE).test_$(CASE) \
+		COCOTB_TOPLEVEL=gpu $(VLT_TOP)
+else
 test: $(BIN)
 	$(MAKE) -C $(ROOT) sim
 	cd $(ROOT) && env COCOTB_TEST_MODULES=test.$(CASE).test_$(CASE) \
 		vvp -m $(COCOTB_VPI) $(RTL_SIM)
+endif
 
 clean:
 	rm -rf $(BUILD)

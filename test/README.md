@@ -133,9 +133,52 @@ make test_logic
 make test CASE=matadd
 ```
 
-RTL 配置为 4 个 CU、每个 CU 8 线程/块。优化后仿真时间随像素数增长：
-16x16 约 5 秒、32x32 约 23 秒、64x64 约 1.5 分钟、128x128 约 5 分钟；
-256x256 及以上需要更长时间，但仍必须使用 RTL：
+RTL 配置为 4 个 core、每个 core 16 线程/块。默认用 Icarus Verilog 仿真：
+16x16 约 7 秒、32x32 约 23 秒、128x128 约 108 秒。
+
+### 切换到 Verilator（同一套 cocotb 用例，快 5 倍以上）
+
+任何用例后面加 `SIM=verilator` 即可：
+
+```bash
+make test raster128x128 SIM=verilator   # 108 s -> 20 s
+make test matadd SIM=verilator          # 1.6 s -> 0.8 s
+```
+
+`test/common.mk` 会共享构建一份 Verilator 模型（`build/vsim/Vtop`，含 cocotb 的
+`verilator.cpp` 主程序与 `-lcocotbvpi_verilator`），之后每个用例直接跑这个二进制，
+不再重新编译模型。
+
+Verilator 不在系统里时，可以**不需要 root** 装到用户目录（以 Fedora 为例）：
+
+```bash
+dnf download --destdir /tmp/vrpm verilator verilator-devel
+mkdir -p ~/.local/verilator && cd ~/.local/verilator
+for r in /tmp/vrpm/verilator*.rpm; do rpm2cpio "$r" | cpio -idm; done
+```
+
+默认路径是 `~/.local/verilator/usr/bin/verilator_bin`（RPM 里的 perl 包装脚本依赖
+`perl-FindBin`，直接调 `verilator_bin` 更省事，但必须指定 `VERILATOR_ROOT`）。
+装到系统里的话覆盖两个变量即可：
+
+```bash
+make test matadd SIM=verilator \
+  VERILATOR=/usr/bin/verilator VERILATOR_ROOT=/usr/share/verilator
+```
+
+实测（16 lane / 4 core 配置，单位秒）：
+
+| 用例 | icarus | verilator | 加速 |
+| - | - | - | - |
+| `raster128x128` | 108.4 | **20.4** | 5.3× |
+| `icache` | 40.5 | 26.0 | 1.6× |
+| `raster32x32` | 6.1 | 2.6 | 2.3× |
+| `raster16x16` | 6.7 | 1.3 | 5.2× |
+| 标量用例（matadd 等） | 1.5 | 0.8 | 1.9× |
+
+⚠️ 两个仿真器对**有符号除法溢出**的定义不同（`INT_MIN / -1`：Icarus 回绕成
+`0x80000000`，Verilator 给 `0`），这曾在 `div` 用例上暴露出来，现在 `alu.sv`
+已把该情况显式钉成 RISC-V 语义（商 `INT_MIN`、余 `0`）。
 
 ```bash
 make test raster256x256
