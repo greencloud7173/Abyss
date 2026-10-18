@@ -125,5 +125,5 @@ vector/matrix 类型的 lowering，所以先用普通 C struct + `_Static_assert
 
 ```bash
 make -C test/matmul
-python3 tools/abysscc/run_abyss.py test/matmul/build/matmul.elf --test matmul
+python3 tools/run_abyss.py test/matmul/build/matmul.elf --test matmul
 ```

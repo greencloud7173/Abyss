@@ -629,7 +629,7 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 2. 移位量直接取 **B 操作数的低 5 位** —— R 型时 B = rs2,I 型时 B = 立即数(`decoded_alu_imm_enable` 已经切好),
    **没有新增 mux**。RISC-V 的 `mod 32` 语义因此天然成立(`SLL rd, rs1, r` 里 r = 33 只移 1 位)。
 3. 操作码扩到 3 位 → `alu.sv` / `decoder.sv` / `core.sv` 三处同步;前 4 个操作的编码值保持不变。
-4. 工具链:旧的 `tools/abysscc/riscv2abyss.py`(已删除)删掉 `slli → MUL` 的 hack,`sll/srl/sra/slli/srli/srai` 现在直通;
+4. 工具链:旧的 `tools/riscv2abyss.py`(已删除)删掉 `slli → MUL` 的 hack,`sll/srl/sra/slli/srli/srai` 现在直通;
    `start.s` 里为那个 hack 预置的三个常量(R23/R27/R28)可以删掉。
 5. 代价:**每线程一个 32 位桶形移位器**(5 级 2:1 mux),这是本次唯一的实际面积开销。
 
@@ -666,7 +666,7 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 
 1. ⚠️ **破坏性变更**:同一个立即数现在表示字节偏移 —— `LDR rd, 4(rs1)` 从“第 4 个字”变成“字节 4,即第 1 个字”。
    现有内核改用普通 C 指针，基址使用字节偏移。
-2. `tools/abysscc/abyss.h` 的宏改回真正的指针运算(`((int*)base)[idx]`,由编译器用 `SLLI` 缩放),
+2. `tools/abyss.h` 的宏改回真正的指针运算(`((int*)base)[idx]`,由编译器用 `SLLI` 缩放),
    头文件后来改为普通 C 指针 + `ABYSS_MATRIX` 类型宏，不再保留 `ABYSS_LD/ST` 之类宏。
 3. C 语言现在可以做 `char`/`short` 和真正的字节指针演算;旧翻译器(已删除)曾新增 `lb/lh/lbu/lhu/sb/sh` 直通。
 4. LSU 新增一组移位/掩码通路(读:lane 下移 + 扩展;写:数据上移 + 4 位掩码),每线程一份。

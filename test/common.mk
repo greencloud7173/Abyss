@@ -41,7 +41,7 @@ $(BUILD):
 
 $(KERNEL_O): $(KERNEL_C) | $(BUILD)
 	$(ABYSS_CLANG) --target=abyss -O2 -fno-pic -fno-delete-null-pointer-checks \
-		-nostdlib -I $(ROOT)/tools/abysscc -c $< -o $@
+-nostdlib -I $(ROOT)/tools -c $< -o $@
 
 $(START_O): $(START_S) | $(BUILD)
 	$(LLVM_MC) -arch=abyss -filetype=obj $< -o $@
