@@ -237,16 +237,17 @@ void kernel(void) {
 
 ### 仿真器选择
 
-`make test <case>` 默认走 iverilog；加 `SIM=verilator` 换成 Verilator，**同一拍数、快 5 倍以上**：
+`make test <case>` **默认走 Verilator**（比 iverilog 快 5 倍以上，拍数完全一致）：
 
 | 用例 | icarus | verilator |
 | - | - | - |
-| `raster128x128` | 108 s | **20 s** |
+| `raster128x128` | 110 s | **21 s** |
 | `raster32x32` | 6.1 s | 2.6 s |
 | `matadd` | 1.6 s | 0.8 s |
 
 ```bash
-make test raster128x128 SIM=verilator
+make test raster128x128              # 默认 Verilator
+make test raster128x128 SIM=icarus   # 需要回退到 iverilog 时
 ```
 
 Verilator 的安装（无需 root）与变量覆盖见 [`test/README.md`](test/README.md)。

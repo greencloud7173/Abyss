@@ -35,14 +35,26 @@ export GPI_USERS := $(LIBPYTHON_LOC);$(shell cocotb-config --pygpi-entry-point)
 
 # ---------------------------------------------------------------------------
 # Simulator selection
-#   SIM=icarus     (默认) iverilog + vvp
-#   SIM=verilator  Verilator 5.x + cocotb VPI,同一拍快 5~20 倍
-#   make test raster128x128 SIM=verilator
+#   SIM=verilator  默认：Verilator 5.x + cocotb VPI，同一拍快 5~20 倍
+#   SIM=icarus     iverilog + vvp（找不到 Verilator 时自动回退）
+#
+#   make test raster128x128              # 默认走 Verilator
+#   make test raster128x128 SIM=icarus   # 强制用 iverilog
 # ---------------------------------------------------------------------------
-SIM ?= icarus
+VERILATOR ?= $(firstword $(wildcard $(HOME)/.local/verilator/usr/bin/verilator_bin) \
+                          $(shell command -v verilator 2>/dev/null))
+ifeq ($(VERILATOR),)
+  SIM ?= icarus
+else
+  SIM ?= verilator
+  # The RPM's perl wrapper is unusable here (missing perl-FindBin), so the local
+  # install is driven through verilator_bin, which needs VERILATOR_ROOT.
+  ifneq ($(findstring $(HOME)/.local/verilator,$(VERILATOR)),)
+    VERILATOR_ROOT ?= $(HOME)/.local/verilator/usr/share/verilator
+  endif
+endif
+VLT_ENV := $(if $(VERILATOR_ROOT),VERILATOR_ROOT=$(VERILATOR_ROOT),)
 
-VERILATOR ?= $(HOME)/.local/verilator/usr/bin/verilator_bin
-VERILATOR_ROOT ?= $(HOME)/.local/verilator/usr/share/verilator
 VLT_BUILD ?= $(ROOT)/build/vsim
 COCOTB_SHARE := $(shell python3 -m cocotb_tools.config --share)
 COCOTB_LIBDIR := $(shell python3 -m cocotb_tools.config --lib-dir)
@@ -80,7 +92,7 @@ $(ROOT)/build/gpu.v: $(wildcard $(ROOT)/src/*.sv)
 	$(MAKE) -C $(ROOT) compile
 
 $(VLT_TOP): $(ROOT)/build/gpu.v $(VLT_CPP)
-	VERILATOR_ROOT=$(VERILATOR_ROOT) $(VERILATOR) -cc --exe -Mdir $(VLT_BUILD) \
+	$(VLT_ENV) $(VERILATOR) -cc --exe -Mdir $(VLT_BUILD) \
 		--top-module gpu --vpi --public-flat-rw --prefix Vtop -o Vtop \
 		-Wno-fatal -Wno-PINMISSING -Wno-lint \
 		-LDFLAGS "-Wl,-rpath,$(COCOTB_LIBDIR) -L$(COCOTB_LIBDIR) -lcocotbvpi_verilator" \

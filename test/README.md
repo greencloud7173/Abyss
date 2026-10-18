@@ -133,17 +133,19 @@ make test_logic
 make test CASE=matadd
 ```
 
-RTL 配置为 4 个 core、每个 core 16 线程/块。默认用 Icarus Verilog 仿真：
-16x16 约 7 秒、32x32 约 23 秒、128x128 约 108 秒。
+RTL 配置为 4 个 core、每个 core 16 线程/块。**默认仿真器是 Verilator**（16x16 约 1.3 秒、
+32x32 约 2.6 秒、128x128 约 21 秒）；找不到 Verilator 时自动回退到 Icarus。
 
-### 切换到 Verilator（同一套 cocotb 用例，快 5 倍以上）
-
-任何用例后面加 `SIM=verilator` 即可：
+### 仿真器选择
 
 ```bash
-make test raster128x128 SIM=verilator   # 108 s -> 20 s
-make test matadd SIM=verilator          # 1.6 s -> 0.8 s
+make test raster128x128              # 默认：Verilator
+make test raster128x128 SIM=icarus   # 强制回 Icarus（16x16 约 7s、128x128 约 110s）
 ```
+
+被丢弃的旧习惯：以前的命令是 `make test xxx SIM=verilator`，现在是默认行为，
+不需要再加参数。日志第一行会写明用的是哪个仿真器（`Running on Verilator ...` /
+`Running on Icarus Verilog ...`），跑之前看一眼就不会搞错。
 
 `test/common.mk` 会共享构建一份 Verilator 模型（`build/vsim/Vtop`，含 cocotb 的
 `verilator.cpp` 主程序与 `-lcocotbvpi_verilator`），之后每个用例直接跑这个二进制，
@@ -162,7 +164,7 @@ for r in /tmp/vrpm/verilator*.rpm; do rpm2cpio "$r" | cpio -idm; done
 装到系统里的话覆盖两个变量即可：
 
 ```bash
-make test matadd SIM=verilator \
+make test matadd \
   VERILATOR=/usr/bin/verilator VERILATOR_ROOT=/usr/share/verilator
 ```
 
