@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Simplified Clang toolchain for the Abyss ISA.
 #
-# clang (RISC-V frontend/codegen) -> riscv2abyss.py -> llvm-mc
+# clang --target=abyss (native Abyss backend) -> start.s + kernel.s -> llvm-mc
 #
 # Usage:
 #   abysscc [--start START.s] [--keep] input.c -o output.o
@@ -9,7 +9,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CLANG="${CLANG:-clang}"
+CLANG="${CLANG:-/home/greencloud7173/llvm-project/build-abyss-clang/bin/clang}"
 LLVM_MC="${LLVM_MC:-/home/greencloud7173/llvm-project/build/bin/llvm-mc}"
 LLVM_OBJCOPY="${LLVM_OBJCOPY:-/home/greencloud7173/llvm-project/build/bin/llvm-objcopy}"
 
@@ -38,17 +38,11 @@ if [[ -z "$INPUT" || -z "$OUTPUT" ]]; then
 fi
 
 BASE="${OUTPUT%.*}"
-RISCV_S="$BASE.riscv.s"
 KERNEL_S="$BASE.kernel.abyss.s"
 ABYSS_S="$BASE.abyss.s"
 
-"$CLANG" --target=riscv32-unknown-elf -march=rv32im -mabi=ilp32 -O2 \
-  -ffixed-x23 -ffixed-x24 -ffixed-x25 -ffixed-x26 -ffixed-x27 \
-  -ffixed-x28 -ffixed-x29 -ffixed-x30 -ffixed-x31 \
-  -fno-pic -fno-delete-null-pointer-checks -nostdlib \
-  -I"$SCRIPT_DIR" -S "$INPUT" -o "$RISCV_S"
-
-python3 "$SCRIPT_DIR/riscv2abyss.py" "$RISCV_S" "$KERNEL_S"
+"$CLANG" --target=abyss -O2 -fno-pic -fno-delete-null-pointer-checks -nostdlib \
+  -I"$SCRIPT_DIR" -S "$INPUT" -o "$KERNEL_S"
 
 if [[ -n "$START" ]]; then
   cat "$START" "$KERNEL_S" > "$ABYSS_S"
@@ -59,7 +53,7 @@ fi
 "$LLVM_MC" -arch=abyss -filetype=obj "$ABYSS_S" -o "$OUTPUT"
 
 if [[ "$KEEP" -eq 0 ]]; then
-  rm -f "$RISCV_S" "$KERNEL_S" "$ABYSS_S"
+  rm -f "$KERNEL_S" "$ABYSS_S"
 fi
 
 echo "wrote $OUTPUT"

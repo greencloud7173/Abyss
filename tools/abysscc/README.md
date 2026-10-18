@@ -1,16 +1,15 @@
-# abysscc — 简化版 Abyss C 编译器
+# abysscc — 纯 Abyss Clang C 编译器
 
-用系统 clang 的 RISC-V 前端/代码生成，把 RISC-V 汇编翻译成 Abyss 汇编，再用
-LLVM 的 Abyss MC 层汇编成 32 位 Abyss 目标文件。这样**不需要重新构建 clang**，
-就能开始写 C 内核；以后要做真正的 Clang target / LLVM 后端时，这套流程和测试
-可以继续复用。
+直接使用本仓库构建出的 `clang --target=abyss`：Clang 前端生成 LLVM IR，
+Abyss 后端直接发射 Abyss 汇编，再用 LLVM 的 Abyss MC 层汇编成 32 位目标文件。
+不再经过 RISC-V 前端或 `riscv2abyss.py`。
 
 ```
 C 源码
-  │  clang --target=riscv32-unknown-elf -march=rv32im -mabi=ilp32 -O2
+  │  clang --target=abyss -O2 -S
   ▼
-RISC-V 汇编 (.riscv.s)
-  │  riscv2abyss.py（寄存器映射 + 伪指令展开）
+Abyss 汇编 (.kernel.abyss.s)
+  │  与 start.s 拼接
   ▼
 Abyss 汇编 (.abyss.s)
   │  llvm-mc -arch=abyss -filetype=obj
@@ -20,8 +19,7 @@ Abyss ELF 目标文件 (.o)
 
 ## 依赖
 
-- 带 RISC-V target 的系统 `clang`（本机 22.1.8 可用）
-- Python 3
+- 本仓库构建出的 `build-abyss-clang/bin/clang`
 - 本仓库构建出的 `build/bin/llvm-mc`、`build/bin/llvm-objcopy`
 - 运行硬件测试时另需 `iverilog`、`cocotb`、`sv2v`（tiny-gpu 原有依赖）
 
@@ -53,7 +51,7 @@ cd /home/greencloud7173/tiny-gpu/tools/abysscc
 
 # 加 --keep 保留中间汇编：
 ./abysscc --start start_vecadd.s --keep examples/vecadd.c -o /tmp/vecadd.o
-# 生成 /tmp/vecadd.riscv.s、/tmp/vecadd.kernel.abyss.s、/tmp/vecadd.abyss.s
+# 生成 /tmp/vecadd.kernel.abyss.s、/tmp/vecadd.abyss.s
 
 # 加 --raw 额外输出纯 .text 二进制（小端 32 位字）：
 ./abysscc --start start_matmul.s --raw examples/matmul.c -o /tmp/matmul.o
@@ -112,8 +110,8 @@ make test logic
 
 | 文件 | 作用 |
 | --- | --- |
-| `abysscc` | 驱动脚本：clang → 翻译 → llvm-mc |
-| `riscv2abyss.py` | RISC-V 汇编到 Abyss 汇编的翻译器 |
+| `abysscc` | 驱动脚本：`clang --target=abyss` → `llvm-mc` |
+| `riscv2abyss.py` | 旧 RISC-V 翻译路线，已不参与构建（保留作参考） |
 | `abyss.h` | `blockIdx/blockDim/threadIdx` 访问和字节地址 `ABYSS_LD/ST` 宏（含 `ABYSS_LDB/LDBU/LDH/LDHU/STB/STH`） |
 | `start_vecadd.s` / `start_matmul.s` | 示例启动 stub |
 | `examples/vecadd.c` / `examples/matmul.c` | 示例 C 内核 |
@@ -162,20 +160,19 @@ make test logic
 
 ## 寄存器约定
 
-编译器以 `-ffixed-x23..x31` 调用，因此 C 代码不会用这些寄存器：
+Abyss 后端采用简单的“每个 SSA 值一个栈槽”策略，不依赖 LLVM 寄存器分配器：
 
 | 寄存器 | 用途 |
 | --- | --- |
 | `x0` | 恒 0 |
-| `R1` (`ra`) | 返回地址 |
+| `R1` (`ra`) | 返回地址（每个函数入口保存到栈） |
 | `R2` (`sp`) | 栈指针（字节地址） |
+| `R5`/`R6`/`R7` | 后端临时寄存器 |
 | `R10-R17` (`a0-a7`) | 参数/返回值 |
-| `R23-R28` | 保留（当前翻译器未使用） |
 | `R29`/`R30`/`R31` | `%blockIdx` / `%blockDim` / `%threadIdx`（只读） |
 
-`abyss.h` 用内联汇编读取 `x29/x30/x31`，效果等同于 Clang builtin；这是简化路线，
-没有改 clang 源码。以后若要做真正的 Clang target，可以把这三个函数替换成
-`__builtin_abyss_*`。
+后端为每个线程分配独立的栈帧（基于 `blockIdx * blockDim + threadIdx`），避免
+多线程共享栈槽。`abyss.h` 仍用内联汇编读取 `x29/x30/x31`。
 
 ## 检查生成的程序字
 
