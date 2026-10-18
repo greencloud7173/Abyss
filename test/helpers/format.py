@@ -71,15 +71,17 @@ def format_instruction(instruction: str) -> str:
                 return f"SRLI {rd_name}, {rs1_name}, {imm & 0x1F}"
             if (imm >> 5) == 0x20:
                 return f"SRAI {rd_name}, {rs1_name}, {imm & 0x1F}"
-    elif opcode == "0000011":  # LOAD (LDR = `lw rd, imm(rs1)`)
-        if funct3 == "010":
-            return f"LDR {rd_name}, {signed_imm}({rs1_name})"
-    elif opcode == "0100011":  # STORE (STR = `sw rs2, imm(rs1)`); S-type imm is split
-        if funct3 == "010":
+    elif opcode == "0000011":  # LOAD: LB / LH / LDR(=lw) / LBU / LHU
+        load_names = {"000": "LB", "001": "LH", "010": "LDR", "100": "LBU", "101": "LHU"}
+        if funct3 in load_names:
+            return f"{load_names[funct3]} {rd_name}, {signed_imm}({rs1_name})"
+    elif opcode == "0100011":  # STORE: SB / SH / STR(=sw); S-type imm is split
+        store_names = {"000": "SB", "001": "SH", "010": "STR"}
+        if funct3 in store_names:
             store_imm = int(instruction[0:7] + instruction[20:25], 2)
             if store_imm >= 2048:
                 store_imm -= 4096
-            return f"STR {rs2_name}, {store_imm}({rs1_name})"
+            return f"{store_names[funct3]} {rs2_name}, {store_imm}({rs1_name})"
     elif opcode == "1100011":  # BRANCH, B-type: `Bcc rs1, rs2, offset` (offset in bytes)
         branch_names = {"000": "BEQ", "001": "BNE", "100": "BLT", "101": "BGE", "110": "BLTU", "111": "BGEU"}
         if funct3 in branch_names:

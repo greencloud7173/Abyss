@@ -14,10 +14,13 @@
 - **定长 32 位指令**,格式与译码风格**对齐 RISC-V**;数据与地址 32 位;每个线程 32 个寄存器。
 - **执行模型(SIMD)**:一个 core 处理一个 block;block 内 4 个线程(`THREADS_PER_BLOCK`)共享 1 个 fetcher + 1 个 decoder,
   但每个线程各有独立的 ALU、LSU、PC、寄存器堆 —— 同一拍所有线程执行同一条指令。
-- **指令集**:23 条 —— R 型 7 条(`ADD` `SUB` `MUL` `DIV` `SLL` `SRL` `SRA`)、
-  I 型 6 条(`ADDI` `LDR` `JALR` `SLLI` `SRLI` `SRAI`)、S 型 1 条(`STR`)、
+- **指令集**:29 条 —— R 型 7 条(`ADD` `SUB` `MUL` `DIV` `SLL` `SRL` `SRA`)、
+  I 型 11 条(`ADDI` `LDR` `JALR` `SLLI` `SRLI` `SRAI` `LB` `LH` `LBU` `LHU`)、
+  S 型 3 条(`STR` `SB` `SH`)、
   B 型 6 条(`BEQ` `BNE` `BLT` `BGE` `BLTU` `BGEU`)、U 型 2 条(`LUI` `AUIPC`)、J 型 1 条(`JAL`)、GPU 专用 1 条(`RET`)。
   除 `RET` 之外**全部与 RISC-V 官方编码逐位一致**(R/I/S/B/U/J 六种类型齐全)。
+- **数据内存按字节寻址**(与 RISC-V 一致):字节 0..3 = 字 0、字节 4..7 = 字 1 ……
+  访存单元(LSU)负责 `字节地址 → 字地址 + 字节通道` 的转换,并用**掩码**完成字节/半字读写(第 4.5 节)。
 - **`x0` 恒 0**:`R0`(= `x0`)读恒为 0、写入被忽略(与 RISC-V 一致),因此**不能当普通寄存器用**。
 - **伪指令**:`NOP` = `ADDI x0, x0, #0`(编码 `0x00000013`)、`LI rd, #imm` = `ADDI rd, x0, #imm`、
   `J offset` = `JAL x0, offset`;已经没有单独的 `NOP`/`CONST` 指令。
@@ -66,8 +69,14 @@
 | R | `SLL` | `0110011` | `001` | `0000000` | `SLL rd, rs1, rs2` | rd, rs1, rs2(`rs2[4:0]` = 移位量) | `sll` |
 | R | `SRL` | `0110011` | `101` | `0000000` | `SRL rd, rs1, rs2` | 同上(逻辑右移) | `srl` |
 | R | `SRA` | `0110011` | `101` | `0100000` | `SRA rd, rs1, rs2` | 同上(算术右移) | `sra` |
-| I | `LDR` | `0000011` | `010` | — | `LDR rd, imm(rs1)` | rd, rs1, imm12 偏移 | `lw rd, imm(rs1)` |
-| S | `STR` | `0100011` | `010` | — | `STR rs2, imm(rs1)` | rs1=基址, rs2=数据, imm12 偏移 | `sw rs2, imm(rs1)` |
+| I | `LDR` | `0000011` | `010` | — | `LDR rd, imm(rs1)` | rd, rs1, imm12 字节偏移 | `lw rd, imm(rs1)` |
+| I | `LB` | `0000011` | `000` | — | `LB rd, imm(rs1)` | 同上(取 1 字节,符号扩展) | `lb` |
+| I | `LH` | `0000011` | `001` | — | `LH rd, imm(rs1)` | 同上(取 2 字节,符号扩展) | `lh` |
+| I | `LBU` | `0000011` | `100` | — | `LBU rd, imm(rs1)` | 同上(取 1 字节,零扩展) | `lbu` |
+| I | `LHU` | `0000011` | `101` | — | `LHU rd, imm(rs1)` | 同上(取 2 字节,零扩展) | `lhu` |
+| S | `STR` | `0100011` | `010` | — | `STR rs2, imm(rs1)` | rs1=基址, rs2=数据, imm12 字节偏移 | `sw rs2, imm(rs1)` |
+| S | `SB` | `0100011` | `000` | — | `SB rs2, imm(rs1)` | 同上(只写 1 字节) | `sb` |
+| S | `SH` | `0100011` | `001` | — | `SH rs2, imm(rs1)` | 同上(只写 2 字节) | `sh` |
 | I | `ADDI` | `0010011` | `000` | — | `ADDI rd, rs1, #imm12` | rd, rs1, imm12(符号扩展) | `addi` |
 | I | `SLLI` | `0010011` | `001` | —(imm[11:5]=`0000000`) | `SLLI rd, rs1, shamt` | rd, rs1, `imm[4:0]` = 移位量 | `slli` |
 | I | `SRLI` | `0010011` | `101` | —(imm[11:5]=`0000000`) | `SRLI rd, rs1, shamt` | 同上(逻辑右移) | `srli` |
@@ -203,17 +212,26 @@ RISC-V 保留的 custom 段分配(便于将来扩展,均已避开官方指令编
 | opcode | funct3 | 指令 | 语法 | 操作 | 关键控制信号 |
 | - | - | - | - | - | - |
 | `0010011` | `000` | `ADDI` | `ADDI rd, rs1, #imm12` | `rd ← rs1 + 符号扩展(imm12)` | `reg_write=1`,`reg_input_mux=00`,`alu_mux=00`,`alu_imm_enable=1` |
-| `0000011` | `010` | `LDR` | `LDR rd, imm(rs1)` | `rd ← mem[rs1 + 符号扩展(imm12)]`(异步) | `reg_write=1`,`reg_input_mux=01`,`mem_read_enable=1` |
-| `0100011` | `010` | `STR` | `STR rs2, imm(rs1)` | `mem[rs1 + 符号扩展(imm12)] ← rs2`(异步) | `mem_write_enable=1` |
+| `0000011` | `000` / `001` | `LB` / `LH` | `LB/LH rd, imm(rs1)` | `rd ← sign_ext(mem8/16[rs1+imm])` | `reg_write=1`,`reg_input_mux=01`,`mem_read_enable=1`,`mem_size=00/01` |
+| `0000011` | `100` / `101` | `LBU` / `LHU` | `LBU/LHU rd, imm(rs1)` | `rd ← zero_ext(mem8/16[...])` | 同上,再加 `mem_unsigned=1` |
+| `0000011` | `010` | `LDR` | `LDR rd, imm(rs1)` | `rd ← mem[rs1 + imm]`(异步) | `reg_write=1`,`reg_input_mux=01`,`mem_read_enable=1`,`mem_size=10` |
+| `0100011` | `010` | `STR` | `STR rs2, imm(rs1)` | `mem[rs1 + imm] ← rs2`(异步) | `mem_write_enable=1`,`mem_size=10`,mask=4'b1111 |
+| `0100011` | `000` / `001` | `SB` / `SH` | `SB/SH rs2, imm(rs1)` | 只写 1 / 2 字节 | `mem_write_enable=1`,`mem_size=00/01`,mask 由 lane 算出 |
 | `0010011` | `001` | `SLLI` | `SLLI rd, rs1, shamt` | `rd ← rs1 << shamt`(shamt = `imm[4:0]`,`imm[11:5]` 必须为 0) | `reg_write=1`,`reg_input_mux=00`,`alu_mux=100`,`alu_imm_enable=1` |
 | `0010011` | `101` | `SRLI` / `SRAI` | `SRLI/SRAI rd, rs1, shamt` | `rd ← rs1 >> shamt` / `rd ← rs1 >>> shamt` | 同上,`alu_mux=101` / `110`,靠 `imm[11:5]`(`0000000` / `0100000`)区分 |
 
 - `ADDI` 把 ALU 的 B 操作数从 `rs2` 切到符号扩展后的 `imm12`(`decoded_alu_imm_enable`,ALU 内部一个 2:1 mux),运算仍是 ADD。
   `ADDI rd, x0, #imm` 就是伪指令 `LI rd, #imm`;`ADDI x0, x0, #0` 就是 `NOP`(写入 x0 被忽略,所以真的什么都不做)。
-- `LDR`/`STR` 是 RISC-V 的**偏移寻址**:有效地址 = `rs1 + 符号扩展(imm12)`,加法在 LSU 里做(每线程一个 32 位加法器)。
-  偏移为 0 时就退化成“寄存器里的地址”;要算下标用 `ADD`/`ADDI`。
-- `STR` 是 S 型,偏移被拆到 `[31:25]`/`[11:7]` 两段,`decoder` 在 `STORE` 分支里拼成 12 位再送给 LSU。
-- 立即数范围:`ADDI` 与 `LDR`/`STR` 偏移为 −2048 … 2047(符号扩展);B 型字节偏移为 −4096 … +4094(且必须是 4 的倍数)。
+- `LDR`/`STR`/`LB`/`LH`/`LBU`/`LHU`/`SB`/`SH` 是 RISC-V 的**偏移寻址 + 字节地址**:
+  `byte_address = rs1 + 符号扩展(imm12)`,加法在 LSU 里做(每线程一个 32 位加法器)。
+- **内存端口是字宽(32 位),LSU 负责桥接**:`word_address = byte_address >>> 2`,`lane = byte_address[1:0]`。
+  - 读:`LB`/`LH` 把选中的字节/半字**移到低位**再符号扩展,`LBU`/`LHU` 零扩展,`LDR` 取整字;
+  - 写:`SB`/`SH` 把数据移进对应 lane 并输出 **`mem_write_mask`(4 位字节使能)**,内存只更新被选中的字节。
+- 宽度由 **`funct3`** 选:`000` 字节、`001` 半字、`010` 字;load 的 bit2 = 1 表示无符号(`LBU`/`LHU`)。
+- `STR`/`SB`/`SH` 是 S 型,偏移被拆到 `[31:25]`/`[11:7]` 两段,`decoder` 在 `STORE` 分支里拼成 12 位再送给 LSU。
+- 立即数范围:`ADDI` 与访存偏移为 −2048 … 2047(符号扩展);B 型字节偏移为 −4096 … +4094(且必须是 4 的倍数)。
+- 对齐:`LDR`/`STR` 要求 4 字节对齐,`LH`/`LHU`/`SH` 要求 2 字节对齐;不对齐时本实现**不 trap**,而是按所在字 + lane
+  截断处理(见第 9 节)。
 - `DIV` 的除数 `rs2` 为 0 时结果为 `x`(见第 9 节);除零、`INT_MIN / -1` 都**未**按 RISC-V 规则特判。
 
 ### 4.6 每条指令的执行阶段
@@ -222,8 +240,8 @@ RISC-V 保留的 custom 段分配(便于将来扩展,均已避开官方指令编
 | - | - | - | - |
 | `ADD` `SUB` `MUL` `DIV` | `REQUEST` 采样 rs、rt | `EXECUTE` ALU 运算 | `UPDATE` 写 rd |
 | `SLL` `SRL` `SRA` `SLLI` `SRLI` `SRAI` | `REQUEST` 采样 rs1、rs2 | `EXECUTE` 桶形移位器(1 拍) | `UPDATE` 写 rd |
-| `LDR` | `REQUEST` 采样 rs1(基址) | 地址 = rs1 + imm;`REQUEST` 发起读,`WAIT` 等应答 | `UPDATE` 写 rd |
-| `STR` | `REQUEST` 采样 rs1(基址)、rs2(数据) | 地址 = rs1 + imm;`REQUEST` 发起写,`WAIT` 等应答 | — |
+| `LDR` `LB` `LH` `LBU` `LHU` | `REQUEST` 采样 rs1(基址) | 字节地址→字地址+lane;`REQUEST` 发起读,`WAIT` 等应答 | `UPDATE` 写 rd(选择 lane 后扩展) |
+| `STR` `SB` `SH` | `REQUEST` 采样 rs1(基址)、rs2(数据) | 同上;写数据移位到 lane,并带 4 位字节掩码 | — |
 | `ADDI` | `REQUEST` 采样 rs1 | `EXECUTE` ALU 加立即数 | `UPDATE` 写 rd |
 | `LUI` | 无需读(rs1 强指 `x0`) | `EXECUTE` ALU 加 `imm20<<12` | `UPDATE` 写 rd |
 | `AUIPC` | — | `EXECUTE` PC 单元算 `PC + imm` | `UPDATE` 写 rd |
@@ -313,7 +331,9 @@ J 型:instr = (imm[20] << 31) | (imm[10:1] << 21) | (imm[11] << 20) | (imm[19:12
 | `SLLI/SRLI/SRAI` | `slli/srli/srai` | ✅(imm[11:5] 的 0000000 / 0100000 完全一致) |
 | `ADDI rd, rs1, #imm` | `addi rd, rs1, imm` | ✅ |
 | `LDR rd, imm(rs1)` | `lw rd, imm(rs1)` | ✅ |
+| `LB/LH/LBU/LHU rd, imm(rs1)` | `lb/lh/lbu/lhu rd, imm(rs1)` | ✅(funct3 完全一致) |
 | `STR rs2, imm(rs1)` | `sw rs2, imm(rs1)` | ✅ |
+| `SB/SH rs2, imm(rs1)` | `sb/sh rs2, imm(rs1)` | ✅ |
 | `BEQ/BNE/BLT/BGE/BLTU/BGEU` | `beq/bne/blt/bge/bltu/bgeu` | ✅ |
 | `LUI rd, imm20` | `lui rd, imm20` | ✅ |
 | `AUIPC rd, imm20` | `auipc rd, imm20` | ✅ |
@@ -388,7 +408,10 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 - 取高位常量写 `LUI rd, imm20`(`rd = imm20 << 12`,立即数**无符号**);PC 相对地址写 `AUIPC rd, imm20`。
   组合出任意 32 位常量:`LUI rd, %hi(x)` + `ADDI rd, rd, #%lo(x)`。
 - `PC` 相关量的单位是**字节**(`PC 字节地址 = 指令下标 × 4`):`JAL`/`JALR`/`AUIPC` 写进 rd 的值、B/J 型偏移都是字节量;
-- 访存写 `LDR rd, imm(rs1)` / `STR rs2, imm(rs1)`:有效地址 = `rs1 + 符号扩展(imm12)`,偏移可以是负数(如 `-4(R1)`)。
+- 访存写 `LDR rd, imm(rs1)` / `STR rs2, imm(rs1)`(以及 `LB/LH/LBU/LHU`、`SB/SH`):
+  地址是**字节地址** `rs1 + 符号扩展(imm12)`,偏移可以是负数(如 `-4(R1)`)——`LDR R1, -4(R2)` 读 `R2` 前一个字。
+  **字节 0..3 属于字 0**,所以“下一个字”的偏移是 `+4`,不是 `+1`;`LDR`/`STR` 必须 4 字节对齐。
+- 窄访问:`LB/LBU`(1 字节)、`LH/LHU`(2 字节)、`SB/SH` 的地址同样按字节算;例:`LB R1, 5(R2)` 取 `R2+5` 那个字节。
 - 空操作写 `NOP`(= `ADDI x0, x0, #0`,`0x00000013`),不要再依赖全 0 字。
 - 移位写 `SLLI/SRLI/SRAI rd, rs1, shamt`(shamt = 0 … 31,**不带 `#`**)或 `SLL/SRL/SRA rd, rs1, rs2`。
   移位量恒取低 5 位 (`mod 32`):`SLL rd, rs1, r` 里 `r = 33` 实际只移 1 位;
@@ -420,6 +443,9 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 | `JALR` 目标不是 4 的倍数 | 低两位被 `>>> 2` 丢弃(向下取整),不 trap(RISC-V 是 `& ~1` 后对齐异常) |
 | 移位的 funct7 / imm[11:5] 不合法(如 `SLL` 的 funct7 ≠ 0、`SLLI` 的 imm[11:5] ≠ 0) | 该编码未分配,等同 `NOP` |
 | 移位量 ≥ 32 | 硬件只取低 5 位(自动 `mod 32`);汇编器/编译器应当提前拒绝 |
+| 访存宽度未分配(`LOAD`/`STORE` 的 funct3 = `011`/`110`/`111`) | 等同 `NOP`,不发内存请求 |
+| 窄访问地址不对齐(如 `LH` 落在奇数地址) | **不 trap**:`lane` 直接取 `byte_address[1:0]`,跨字部分被丢(结果未定义;RISC-V 会报 misaligned 异常) |
+| 字节地址超出自存宽度 | 高 30 位直接当字地址,无范围检查 |
 
 ## 10. 版本历史
 
@@ -550,6 +576,25 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
    `start.s` 里为那个 hack 预置的三个常量(R23/R27/R28)可以删掉。
 5. 代价:**每线程一个 32 位桶形移位器**(5 级 2:1 mux),这是本次唯一的实际面积开销。
 
+### 字节寻址 + 字节/半字访存(2026-10)
+
+| 项 | 改动前 | 现在 |
+| - | - | - |
+| 访存地址 | `rs1 + imm` 直接当**字**地址(LSU 不做转换) | **字节地址**:`word_address = byte_address >>> 2`,`lane = byte_address[1:0]` |
+| 访存宽度 | 只有 32 位(`LDR`/`STR`) | **`LB`/`LH`/`LBU`/`LHU`/`SB`/`SH`**(`funct3` 选宽度,load 的 bit2 = 无符号) |
+| 窄写 | — | LSU 把数据移进 lane,**`mem_write_mask[3:0]` 字节使能**一直传到内存接口;内存只改写选中的字节 |
+| 窄读 | — | 先把 lane 移到低位,再按 `decoded_mem_unsigned` 做零扩展 / 符号扩展 |
+| 内存接口 | 只有 `valid/address/data/ready` | 多了 `data_mem_write_mask`(`controller` 透传,`test/helpers/memory.py` 按位合并) |
+
+影响:
+
+1. ⚠️ **破坏性变更**:同一个立即数现在表示字节偏移 —— `LDR rd, 4(rs1)` 从“第 4 个字”变成“字节 4,即第 1 个字”。
+   现有内核的地址常量全部 ×4(`test/*/src/*.c` 的 `ABYSS_LD/ST` 基址已改)。
+2. `tools/abysscc/abyss.h` 的宏改回真正的指针运算(`((int*)base)[idx]`,由编译器用 `SLLI` 缩放),
+   并新增 `ABYSS_LDB/LDH/STB/STH` 四个窄访问助手。
+3. C 语言现在可以做 `char`/`short` 和真正的字节指针演算;`riscv2abyss.py` 新增 `lb/lh/lbu/lhu/sb/sh` 直通。
+4. LSU 新增一组移位/掩码通路(读:lane 下移 + 扩展;写:数据上移 + 4 位掩码),每线程一份。
+
 ### 更名 + 手册迁址(2026-10)
 
 | 项 | 改动前 | 现在 |
@@ -565,7 +610,7 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 | 寄存器堆(x0 恒 0、R1–R28 可写、只读 29/30/31) | `src/registers.sv` |
 | 分支比较、PC 相对/寄存器间接跳转、`pc_result`(JAL/JALR/AUIPC 写回值)、PC 计算 | `src/pc.sv` |
 | 算术运算、立即数选择(ADDI / LUI)、移位 | `src/alu.sv` |
-| `LDR` / `STR` 的异步请求与 `rs1 + imm` 地址加法 | `src/lsu.sv` + `src/controller.sv` |
+| `LDR` / `STR` / 窄访存的异步请求、字节地址→字地址+lane、扩展/掩码 | `src/lsu.sv` + `src/controller.sv` |
 | 8 态控制流 | `src/scheduler.sv` |
 | block 分配与 `done` | `src/dispatch.sv` |
 | 反汇编(调试日志) | `test/helpers/format.py` |
@@ -581,6 +626,8 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 | `decoded_branch_cond` | `= funct3` | 选择分支条件(`000` BEQ / `001` BNE / `100` BLT / `101` BGE / `110` BLTU / `111` BGEU) |
 | `decoded_jump_enable` | `1` | 无条件跳转 + 链接(`JAL`) |
 | `decoded_jalr_enable` | `1` | 寄存器间接跳转 + 链接(`JALR`) |
+| `decoded_mem_size` | `00` 字节 / `01` 半字 / `10` 字 | LSU 的访问宽度(选 lane 移位量与写掩码) |
+| `decoded_mem_unsigned` | `1` | 窄 load 零扩展(`LBU`/`LHU`),0 = 符号扩展 |
 | `decoded_ret` | `1` | 结束本 block(`RET`) |
 
 ## 12. 设计取舍与扩展预留
@@ -593,9 +640,10 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 | 无 `JALR` | ~~只有直接跳转,没有间接跳转/返回~~ **2026-10 已补** | — |
 | 无 ABI / 栈 | 有 `JAL`/`JALR`,但未约定 `ra`/`sp`/参数寄存器/栈布局 | 定 ABI + 编译器后端 |
 | 无 `SLT`/`SLTI`/`SLTU` | 比较结果只用于分支,不进寄存器 | ALU 比较结果写回通路(mux 已够用,`reg_input_mux` 还有空余) |
-| 无字节/半字访存与扩展加载 | 只有字的 `LDR`/`STR` | `LB`/`LH`/`LBU`/`LHU` 与写回扩展 mux |
+| 无字节/半字访存与扩展加载 | ~~只有字的 `LDR`/`STR`~~ **2026-10 已补** `LB/LH/LBU/LHU/SB/SH` | — |
+| 无 `FW`/`FLW` 等浮点访存 | 只有整数 | — |
 | 无 `DIVU` / `REM` | 只有有符号 `DIV` | ALU 再加一条运算(OP 的 funct3 `101` 空着) |
-| 数据内存按**字**寻址、PC 相关量按**字节** | `LDR rd, 4(rs1)` 是“第 4 个字+rs1”;`JAL`/`AUIPC` 的值是字节地址 | 字节寻址的数据内存(改 LSU 与测试内存模型) |
+| ~~数据内存按**字**寻址~~ | **2026-10 已改为字节寻址**(LSU 内做 `>>2` + lane 选择/掩码) | — |
 | 无 `CSR` / 系统指令 | — | — |
 
 **扩展方式**(新增指令):

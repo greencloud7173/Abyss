@@ -23,6 +23,7 @@ module controller #(
     input reg [NUM_CONSUMERS-1:0] consumer_write_valid,
     input reg [ADDR_BITS-1:0] consumer_write_address [NUM_CONSUMERS-1:0],
     input reg [DATA_BITS-1:0] consumer_write_data [NUM_CONSUMERS-1:0],
+    input reg [(DATA_BITS/8)-1:0] consumer_write_mask [NUM_CONSUMERS-1:0],
     output reg [NUM_CONSUMERS-1:0] consumer_write_ready,
 
     // Memory Interface (Data / Program)
@@ -33,6 +34,7 @@ module controller #(
     output reg [NUM_CHANNELS-1:0] mem_write_valid,
     output reg [ADDR_BITS-1:0] mem_write_address [NUM_CHANNELS-1:0],
     output reg [DATA_BITS-1:0] mem_write_data [NUM_CHANNELS-1:0],
+    output reg [(DATA_BITS/8)-1:0] mem_write_mask [NUM_CHANNELS-1:0],
     input reg [NUM_CHANNELS-1:0] mem_write_ready
 );
     localparam IDLE = 3'b000, 
@@ -54,6 +56,7 @@ module controller #(
             mem_write_valid <= 0;
             mem_write_address <= '{default: 'h0};
             mem_write_data <= '{default: 'h0};
+            mem_write_mask <= '{default: 'h0};
 
             consumer_read_ready <= 0;
             consumer_read_data <= '{default: 'h0};
@@ -87,6 +90,7 @@ module controller #(
                                 mem_write_valid[i] <= 1;
                                 mem_write_address[i] <= consumer_write_address[j];
                                 mem_write_data[i] <= consumer_write_data[j];
+                                mem_write_mask[i] <= consumer_write_mask[j];
                                 controller_state[i] <= WRITE_WAITING;
 
                                 // Once we find a pending request, pick it up with this channel and stop looking for requests

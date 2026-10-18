@@ -154,15 +154,16 @@ def translate(text):
         elif mnem == "addi":
             rd, rs1 = reg(ops[0]), reg(ops[1])
             out.append(f"ADDI {rd}, {rs1}, #{parse_imm(ops[2])}")
-        elif mnem in ("lw", "sw"):
-            if mnem == "lw":
-                rd = reg(ops[0])
-                base, off = parse_mem(ops[1])
-                out.append(f"LDR {rd}, {off}({reg(base)})")
-            else:
-                rs2 = reg(ops[0])
-                base, off = parse_mem(ops[1])
-                out.append(f"STR {rs2}, {off}({reg(base)})")
+        elif mnem in ("lw", "lb", "lh", "lbu", "lhu"):
+            rd = reg(ops[0])
+            base, off = parse_mem(ops[1])
+            table = {"lw": "LDR", "lb": "LB", "lh": "LH", "lbu": "LBU", "lhu": "LHU"}
+            out.append(f"{table[mnem]} {rd}, {off}({reg(base)})")
+        elif mnem in ("sw", "sb", "sh"):
+            rs2 = reg(ops[0])
+            base, off = parse_mem(ops[1])
+            table = {"sw": "STR", "sb": "SB", "sh": "SH"}
+            out.append(f"{table[mnem]} {rs2}, {off}({reg(base)})")
         elif mnem in ("beq", "bne", "blt", "bge", "bltu", "bgeu"):
             rs1, rs2 = reg(ops[0]), reg(ops[1])
             out.append(f"{mnem.upper()} {rs1}, {rs2}, {ops[2]}")

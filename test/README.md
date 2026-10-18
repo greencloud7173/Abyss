@@ -37,6 +37,15 @@ test/
     build/
       shift.o
       shift.bin
+  mem/
+    __init__.py
+    test_mem.py
+    src/
+      mem.c
+      start.s
+    build/
+      mem.o
+      mem.bin
 ```
 
 ## 运行
@@ -47,11 +56,13 @@ cd /home/greencloud7173/tiny-gpu
 make test matadd
 make test matmul
 make test shift
+make test mem
 
 # 等价写法
 make test_matadd
 make test_matmul
 make test_shift
+make test_mem
 make test CASE=matadd
 ```
 

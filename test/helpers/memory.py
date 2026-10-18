@@ -21,6 +21,7 @@ class Memory:
             self.mem_write_valid = getattr(dut, f"{name}_mem_write_valid")
             self.mem_write_address = getattr(dut, f"{name}_mem_write_address")
             self.mem_write_data = getattr(dut, f"{name}_mem_write_data")
+            self.mem_write_mask = getattr(dut, f"{name}_mem_write_mask", None)
             self.mem_write_ready = getattr(dut, f"{name}_mem_write_ready")
 
     def run(self):
@@ -61,9 +62,27 @@ class Memory:
             ]
             mem_write_ready = [0] * self.channels
 
+            # Byte enables: only the lanes selected by mem_write_mask are updated,
+            # the remaining bytes keep their old value (byte / half-word stores)
+            if self.mem_write_mask is not None:
+                mem_write_mask = [
+                    int(str(self.mem_write_mask.value)[i:i+4], 2)
+                    for i in range(0, len(str(self.mem_write_mask.value)), 4)
+                ]
+            else:
+                mem_write_mask = [(1 << 4) - 1] * self.channels
+
             for i in range(self.channels):
                 if mem_write_valid[i] == 1:
-                    self.memory[mem_write_address[i]] = mem_write_data[i]
+                    address = mem_write_address[i]
+                    old = self.memory[address]
+                    new = 0
+                    for lane in range(self.addr_bits // 8):
+                        if (mem_write_mask[i] >> lane) & 1:
+                            new |= mem_write_data[i] & (0xFF << (8 * lane))
+                        else:
+                            new |= old & (0xFF << (8 * lane))
+                    self.memory[address] = new & 0xFFFFFFFF
                     mem_write_ready[i] = 1
                 else:
                     mem_write_ready[i] = 0

@@ -37,6 +37,7 @@ module core #(
     output reg [THREADS_PER_BLOCK-1:0] data_mem_write_valid,
     output reg [DATA_MEM_ADDR_BITS-1:0] data_mem_write_address [THREADS_PER_BLOCK-1:0],
     output reg [DATA_MEM_DATA_BITS-1:0] data_mem_write_data [THREADS_PER_BLOCK-1:0],
+    output reg [(DATA_MEM_DATA_BITS/8)-1:0] data_mem_write_mask [THREADS_PER_BLOCK-1:0],
     input reg [THREADS_PER_BLOCK-1:0] data_mem_write_ready
 );
     // State
@@ -64,6 +65,8 @@ module core #(
     reg decoded_reg_write_enable;           // Enable writing to a register
     reg decoded_mem_read_enable;            // Enable reading from memory
     reg decoded_mem_write_enable;           // Enable writing to memory
+    reg [1:0] decoded_mem_size;             // Access width: 00 byte, 01 half, 10 word
+    reg decoded_mem_unsigned;               // Zero-extend narrow loads (LBU / LHU)
     reg [1:0] decoded_reg_input_mux;        // Select input to register
     reg [2:0] decoded_alu_arithmetic_mux;   // Select arithmetic operation
     reg decoded_alu_imm_enable;             // Use imm12 as the ALU B operand (ADDI)
@@ -103,6 +106,8 @@ module core #(
         .decoded_reg_write_enable(decoded_reg_write_enable),
         .decoded_mem_read_enable(decoded_mem_read_enable),
         .decoded_mem_write_enable(decoded_mem_write_enable),
+        .decoded_mem_size(decoded_mem_size),
+        .decoded_mem_unsigned(decoded_mem_unsigned),
         .decoded_reg_input_mux(decoded_reg_input_mux),
         .decoded_alu_arithmetic_mux(decoded_alu_arithmetic_mux),
         .decoded_alu_imm_enable(decoded_alu_imm_enable),
@@ -163,6 +168,8 @@ module core #(
                 .core_state(core_state),
                 .decoded_mem_read_enable(decoded_mem_read_enable),
                 .decoded_mem_write_enable(decoded_mem_write_enable),
+                .decoded_mem_size(decoded_mem_size),
+                .decoded_mem_unsigned(decoded_mem_unsigned),
                 .decoded_immediate(decoded_immediate),
                 .mem_read_valid(data_mem_read_valid[i]),
                 .mem_read_address(data_mem_read_address[i]),
@@ -171,6 +178,7 @@ module core #(
                 .mem_write_valid(data_mem_write_valid[i]),
                 .mem_write_address(data_mem_write_address[i]),
                 .mem_write_data(data_mem_write_data[i]),
+                .mem_write_mask(data_mem_write_mask[i]),
                 .mem_write_ready(data_mem_write_ready[i]),
                 .rs(rs[i]),
                 .rt(rt[i]),

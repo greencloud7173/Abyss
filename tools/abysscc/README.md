@@ -39,6 +39,9 @@ cd /home/greencloud7173/tiny-gpu/tools/abysscc
 # 位移测试（SLL/SRL/SRA/SLLI/SRLI/SRAI）
 ./abysscc --start ../../test/shift/src/start.s --raw ../../test/shift/src/shift.c -o /tmp/shift.o
 
+# 字节/半字访存测试（LB/LBU/LH/LHU/SB/SH）
+./abysscc --start ../../test/mem/src/start.s --raw ../../test/mem/src/mem.c -o /tmp/mem.o
+
 # 加 --keep 保留中间汇编：
 ./abysscc --start start_vecadd.s --keep examples/vecadd.c -o /tmp/vecadd.o
 # 生成 /tmp/vecadd.riscv.s、/tmp/vecadd.kernel.abyss.s、/tmp/vecadd.abyss.s
@@ -50,7 +53,7 @@ cd /home/greencloud7173/tiny-gpu/tools/abysscc
 
 `--start` 指定启动 stub。stub 负责：
 
-1. 设置 `sp`（示例用字地址 `0x1000`）；
+1. 设置 `sp`（示例用字节地址 `0x1000`）；
 2. 可选地设置内核参数（如 matmul 的 `N=2` 放在 `a0`/`R10`）；
 3. `JAL R1, kernel` 调用 C 内核；
 4. `RET` 结束该 block。
@@ -65,9 +68,11 @@ cd /home/greencloud7173/tiny-gpu/tools/abysscc
 python3 run_abyss.py /tmp/vecadd.o --test vecadd
 python3 run_abyss.py /tmp/matmul.o --test matmul
 python3 run_abyss.py /tmp/shift.o --test shift
+python3 run_abyss.py /tmp/mem.o --test mem
 # vecadd: got [0, 2, 4, ...], want [...], OK
 # matmul: got [7, 10, 15, 22], want [...], OK
 # shift: 六种移位形式全部匹配
+# mem: LB/LBU/LH/LHU/SB/SH 全部匹配
 ```
 
 真实硬件模型（cocotb + iverilog）：
@@ -77,12 +82,13 @@ cd /home/greencloud7173/tiny-gpu
 make test matadd
 make test matmul
 make test shift
-# 等价写法：make test_matadd / make test_matmul / make test_shift
+make test mem
+# 等价写法：make test_matadd / make test_matmul / make test_shift / make test_mem
 ```
 
 测试会自动把 `test/<case>/src/<case>.c` 编译成
 `test/<case>/build/<case>.bin`，Python 入口只提供数据内存参数和二进制名，
-由 `test/helpers/program.py` 负责加载和运行。三个用例均通过。
+由 `test/helpers/program.py` 负责加载和运行。四个用例均通过。
 
 ## 文件说明
 
@@ -90,11 +96,11 @@ make test shift
 | --- | --- |
 | `abysscc` | 驱动脚本：clang → 翻译 → llvm-mc |
 | `riscv2abyss.py` | RISC-V 汇编到 Abyss 汇编的翻译器 |
-| `abyss.h` | `blockIdx/blockDim/threadIdx` 访问和字地址 `ABYSS_LD/ST` 宏 |
+| `abyss.h` | `blockIdx/blockDim/threadIdx` 访问和字节地址 `ABYSS_LD/ST` 宏（含 `ABYSS_LDB/LDBU/LDH/LDHU/STB/STH`） |
 | `start_vecadd.s` / `start_matmul.s` | 示例启动 stub |
 | `examples/vecadd.c` / `examples/matmul.c` | 示例 C 内核 |
-| `run_abyss.py` | Abyss 功能模拟器（含位移指令） |
-| `../../test/matadd/src/` / `../../test/matmul/src/` / `../../test/shift/src/` | cocotb 测试用的 C 源码和启动 stub |
+| `run_abyss.py` | Abyss 功能模拟器（含位移和窄访存指令） |
+| `../../test/matadd/src/` / `../../test/matmul/src/` / `../../test/shift/src/` / `../../test/mem/src/` | cocotb 测试用的 C 源码和启动 stub |
 
 ## C 语言子集与限制
 
@@ -103,26 +109,28 @@ make test shift
 
 ### 必须注意
 
-- **数据内存按字寻址**：地址 1 是第二个 32 位字，不是字节 1。不要用 `int *`
-  指针算术（LLVM 会按 4 字节缩放）；用 `abyss.h` 的整数地址宏：
+- **数据内存按字节寻址**（与 RISC-V 一致）：字节 0..3 是字 0，`int *` 指针算术
+  可以正常用（编译器用 `SLLI` 缩放），基址写成字节偏移即可：
   ```c
-  ABYSS_ST(16, i, ABYSS_LD(0, i) + ABYSS_LD(8, i));
+  ABYSS_ST(64, i, ABYSS_LD(0, i) + ABYSS_LD(32, i));
   ```
-- 只使用 `int`（32 位）。不要用 `char`/`short`/`long long`/浮点。
+- 字节/半字访问用 `ABYSS_LDB/LDBU/LDH/LDHU/STB/STH`（对应 `LB/LBU/LH/LHU/SB/SH`）。
+- 支持 `int`/`unsigned`/`char`/`short`；不要用 `long long`/浮点。窄类型建议通过
+  上面的宏显式访问（翻译器已支持 `lb/lh/lbu/lhu/sb/sh`）。
 - 不要用位运算 `& | ^`。移位已支持：`<<`/`>>` 由 clang 按 C 类型选择
   `SLL/SRL/SRA` 或 `SLLI/SRLI/SRAI`；移位量取低 5 位（mod 32）。
 - 不要用无符号除法/取余（`unsigned` 的 `/`、`%`）；ISA 只有有符号 `DIV`。
 - 不支持全局变量、`la`、PIC、VLAs、可变参数、`libc`。数据由测试 harness 预先
-  放在约定的字地址。
+  放在约定的字节地址。
 - 函数调用：`call`/`tail` 会翻译成直接 `JAL`；`ret` 翻译成 `JALR x0, 0(ra)`。
   嵌套调用由 clang 正常保存/恢复 `ra`，但被调用函数同样要遵守上述内存/类型限制。
-- 栈指针由 stub 设为字地址 `0x1000`。clang 的栈偏移在硬件上按“字偏移”解释，
-  帧会变成 4 倍大小的字，但函数内部访问一致；只要栈区不与数据区重叠即可。
+- 栈指针由 stub 设为字节地址 `0x1000`。clang 的栈偏移本来就是字节偏移，和当前
+  LSU 的字节寻址一致；只要栈区不与数据区重叠即可。
 
 ### 已支持
 
 - `+ - * /`（有符号）、比较、`if`、`for`/`while`、函数调用/返回
-- `ADDI`、`LDR`/`STR`（字）、六种分支、`LUI`/`AUIPC`、`JAL`/`JALR`、`RET`
+- `ADDI`、`LDR`/`STR`（字）、`LB`/`LH`/`LBU`/`LHU`/`SB`/`SH`（字节/半字）、六种分支、`LUI`/`AUIPC`、`JAL`/`JALR`、`RET`
 - `SLL/SRL/SRA`（变量移位）和 `SLLI/SRLI/SRAI`（常量移位），移位量 mod 32
 - `slt`/`sltu`/`slti`/`sltiu` 展开为比较+分支
 - `rem` 展开为 `DIV` + `MUL` + `SUB`
@@ -131,7 +139,6 @@ make test shift
 
 - `andi/ori/xori/and/or/xor`（`andi sp, sp, -16` 作为对齐 no-op 被丢弃）
 - `divu/remu`
-- `lh/lhu/sh/lb/lbu/sb`（无字节/半字访存）
 - 浮点、64 位、原子、压缩指令等
 
 ## 寄存器约定
@@ -142,7 +149,7 @@ make test shift
 | --- | --- |
 | `x0` | 恒 0 |
 | `R1` (`ra`) | 返回地址 |
-| `R2` (`sp`) | 栈指针（字地址） |
+| `R2` (`sp`) | 栈指针（字节地址） |
 | `R10-R17` (`a0-a7`) | 参数/返回值 |
 | `R24`/`R25` | `slt`/`slti` 展开临时寄存器 |
 | `R26` | `rem` 展开临时寄存器 |

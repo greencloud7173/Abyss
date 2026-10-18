@@ -42,6 +42,7 @@ module gpu #(
     output wire [DATA_MEM_NUM_CHANNELS-1:0] data_mem_write_valid,
     output wire [DATA_MEM_ADDR_BITS-1:0] data_mem_write_address [DATA_MEM_NUM_CHANNELS-1:0],
     output wire [DATA_MEM_DATA_BITS-1:0] data_mem_write_data [DATA_MEM_NUM_CHANNELS-1:0],
+    output wire [(DATA_MEM_DATA_BITS/8)-1:0] data_mem_write_mask [DATA_MEM_NUM_CHANNELS-1:0],
     input wire [DATA_MEM_NUM_CHANNELS-1:0] data_mem_write_ready
 );
     // Control
@@ -63,6 +64,7 @@ module gpu #(
     reg [NUM_LSUS-1:0] lsu_write_valid;
     reg [DATA_MEM_ADDR_BITS-1:0] lsu_write_address [NUM_LSUS-1:0];
     reg [DATA_MEM_DATA_BITS-1:0] lsu_write_data [NUM_LSUS-1:0];
+    reg [(DATA_MEM_DATA_BITS/8)-1:0] lsu_write_mask [NUM_LSUS-1:0];
     reg [NUM_LSUS-1:0] lsu_write_ready;
 
     // Fetcher <> Program Memory Controller Channels
@@ -99,6 +101,7 @@ module gpu #(
         .consumer_write_valid(lsu_write_valid),
         .consumer_write_address(lsu_write_address),
         .consumer_write_data(lsu_write_data),
+        .consumer_write_mask(lsu_write_mask),
         .consumer_write_ready(lsu_write_ready),
 
         .mem_read_valid(data_mem_read_valid),
@@ -108,6 +111,7 @@ module gpu #(
         .mem_write_valid(data_mem_write_valid),
         .mem_write_address(data_mem_write_address),
         .mem_write_data(data_mem_write_data),
+        .mem_write_mask(data_mem_write_mask),
         .mem_write_ready(data_mem_write_ready)
     );
 
@@ -163,6 +167,7 @@ module gpu #(
             reg [THREADS_PER_BLOCK-1:0] core_lsu_write_valid;
             reg [DATA_MEM_ADDR_BITS-1:0] core_lsu_write_address [THREADS_PER_BLOCK-1:0];
             reg [DATA_MEM_DATA_BITS-1:0] core_lsu_write_data [THREADS_PER_BLOCK-1:0];
+            reg [(DATA_MEM_DATA_BITS/8)-1:0] core_lsu_write_mask [THREADS_PER_BLOCK-1:0];
             reg [THREADS_PER_BLOCK-1:0] core_lsu_write_ready;
 
             // Pass through signals between LSUs and data memory controller
@@ -176,6 +181,7 @@ module gpu #(
                     lsu_write_valid[lsu_index] <= core_lsu_write_valid[j];
                     lsu_write_address[lsu_index] <= core_lsu_write_address[j];
                     lsu_write_data[lsu_index] <= core_lsu_write_data[j];
+                    lsu_write_mask[lsu_index] <= core_lsu_write_mask[j];
                     
                     core_lsu_read_ready[j] <= lsu_read_ready[lsu_index];
                     core_lsu_read_data[j] <= lsu_read_data[lsu_index];
@@ -210,6 +216,7 @@ module gpu #(
                 .data_mem_write_valid(core_lsu_write_valid),
                 .data_mem_write_address(core_lsu_write_address),
                 .data_mem_write_data(core_lsu_write_data),
+                .data_mem_write_mask(core_lsu_write_mask),
                 .data_mem_write_ready(core_lsu_write_ready)
             );
         end

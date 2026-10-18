@@ -33,6 +33,8 @@ module decoder (
     output reg decoded_reg_write_enable,           // Enable writing to a register
     output reg decoded_mem_read_enable,            // Enable reading from memory
     output reg decoded_mem_write_enable,           // Enable writing to memory
+    output reg [1:0] decoded_mem_size,             // Access width: 00 byte, 01 half, 10 word
+    output reg decoded_mem_unsigned,               // Zero-extend narrow loads (LBU / LHU)
     output reg [1:0] decoded_reg_input_mux,        // Select input to register
     output reg [2:0] decoded_alu_arithmetic_mux,   // Select arithmetic operation
     output reg decoded_alu_imm_enable,             // Use the immediate as the ALU B operand (ADDI / LUI)
@@ -60,8 +62,13 @@ module decoder (
         F3_SLL = 3'b001,                // OP: sll;   OP-IMM: slli
         F3_DIV = 3'b100,                // OP: div
         F3_SRL_SRA = 3'b101,            // OP: srl / sra; OP-IMM: srli / srai
-        F3_LW = 3'b010,                 // LOAD: lw
-        F3_SW = 3'b010;                 // STORE: sw
+        F3_LW = 3'b010,                 // LOAD: lw (also the width selector for LB/LH/LBU/LHU)
+        F3_SW = 3'b010;                 // STORE: sw (also the width selector for SB/SH)
+
+    // Access widths (memory)
+    localparam MEM_BYTE = 2'b00,
+        MEM_HALF = 2'b01,
+        MEM_WORD = 2'b10;
 
     // Branch conditions (BRANCH funct3, same values as RISC-V)
     localparam BEQ = 3'b000,
@@ -94,6 +101,8 @@ module decoder (
             decoded_reg_write_enable <= 0;
             decoded_mem_read_enable <= 0;
             decoded_mem_write_enable <= 0;
+            decoded_mem_size <= 0;
+            decoded_mem_unsigned <= 0;
             decoded_reg_input_mux <= 0;
             decoded_alu_arithmetic_mux <= 0;
             decoded_alu_imm_enable <= 0;
@@ -117,6 +126,8 @@ module decoder (
                 decoded_reg_write_enable <= 0;
                 decoded_mem_read_enable <= 0;
                 decoded_mem_write_enable <= 0;
+                decoded_mem_size <= 0;
+                decoded_mem_unsigned <= 0;
                 decoded_reg_input_mux <= 0;
                 decoded_alu_arithmetic_mux <= 0;
                 decoded_alu_imm_enable <= 0;
@@ -216,20 +227,34 @@ module decoder (
                         endcase
                     end
                     LOAD: begin 
-                        // LDR: `lw rd, imm(rs1)` (I-type, imm12 already sliced)
-                        if (instruction[14:12] == F3_LW) begin 
-                            decoded_reg_write_enable <= 1;
-                            decoded_reg_input_mux <= 2'b01;
-                            decoded_mem_read_enable <= 1;
-                        end
+                        // LB / LH / LW / LBU / LHU: funct3 picks the width and the extension
+                        // (bit 2 set = unsigned/zero-extend), address is a byte address
+                        decoded_reg_write_enable <= 1;
+                        decoded_reg_input_mux <= 2'b01;
+                        case (instruction[14:12])
+                            3'b000: begin decoded_mem_read_enable <= 1; decoded_mem_size <= MEM_BYTE; decoded_mem_unsigned <= 0; end
+                            3'b001: begin decoded_mem_read_enable <= 1; decoded_mem_size <= MEM_HALF; decoded_mem_unsigned <= 0; end
+                            3'b010: begin decoded_mem_read_enable <= 1; decoded_mem_size <= MEM_WORD; decoded_mem_unsigned <= 0; end
+                            3'b100: begin decoded_mem_read_enable <= 1; decoded_mem_size <= MEM_BYTE; decoded_mem_unsigned <= 1; end
+                            3'b101: begin decoded_mem_read_enable <= 1; decoded_mem_size <= MEM_HALF; decoded_mem_unsigned <= 1; end
+                            default: begin 
+                                // Unallocated width: nothing happens (NOP)
+                                decoded_reg_write_enable <= 0;
+                                decoded_reg_input_mux <= 2'b00;
+                            end
+                        endcase
                     end
                     STORE: begin 
-                        // STR: `sw rs2, imm(rs1)` - S-type, so the 12-bit offset is split
-                        // across instruction[31:25] and instruction[11:7]
+                        // SB / SH / SW: S-type, so the 12-bit offset is split across
+                        // instruction[31:25] and instruction[11:7]; the LSU masks the
+                        // bytes that are actually written
                         decoded_immediate <= {{20{instruction[31]}}, instruction[31:25], instruction[11:7]};
-                        if (instruction[14:12] == F3_SW) begin 
-                            decoded_mem_write_enable <= 1;
-                        end
+                        case (instruction[14:12])
+                            3'b000: begin decoded_mem_write_enable <= 1; decoded_mem_size <= MEM_BYTE; end
+                            3'b001: begin decoded_mem_write_enable <= 1; decoded_mem_size <= MEM_HALF; end
+                            3'b010: begin decoded_mem_write_enable <= 1; decoded_mem_size <= MEM_WORD; end
+                            default: begin end
+                        endcase
                     end
                     BRANCH: begin 
                         // B-type conditional branch: `Bcc rs1, rs2, offset`

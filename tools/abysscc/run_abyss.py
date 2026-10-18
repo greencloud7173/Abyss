@@ -3,7 +3,9 @@
 
 Used to sanity-check programs produced by abysscc without running Verilator.
 It implements the Abyss instructions used by the tests, including the
-SLL/SRL/SRA and SLLI/SRLI/SRAI shifts, and the word-addressed data memory model.
+SLL/SRL/SRA and SLLI/SRLI/SRAI shifts.  Data memory is byte-addressed:
+the simulator maps byte_address >> 2 to a word and uses byte lanes for
+LB/LH/LBU/LHU/SB/SH.
 """
 
 import argparse
@@ -94,15 +96,45 @@ class Cpu:
                 else:
                     raise RuntimeError(f"unsupported I-type {w:08x}")
                 self.pc += 1
-            elif opcode == 0x03 and funct3 == 2:
-                addr = self.r[rs1] + imm_i
-                self.wr(rd, self.mem.get(addr, 0))
+            elif opcode == 0x03:
+                byte_addr = (self.r[rs1] + imm_i) & 0xFFFFFFFF
+                word = self.mem.get(byte_addr >> 2, 0) & 0xFFFFFFFF
+                lane = byte_addr & 3
+                if funct3 == 0:  # LB
+                    value = sext((word >> (lane * 8)) & 0xFF, 8)
+                elif funct3 == 1:  # LH
+                    value = sext((word >> ((lane >> 1) * 16)) & 0xFFFF, 16)
+                elif funct3 == 2:  # LDR
+                    value = word
+                elif funct3 == 4:  # LBU
+                    value = (word >> (lane * 8)) & 0xFF
+                elif funct3 == 5:  # LHU
+                    value = (word >> ((lane >> 1) * 16)) & 0xFFFF
+                else:
+                    raise RuntimeError(f"unsupported load {w:08x}")
+                self.wr(rd, value)
                 self.pc += 1
-            elif opcode == 0x23 and funct3 == 2:
+            elif opcode == 0x23:
                 imm = (((w >> 25) & 0x7F) << 5) | ((w >> 7) & 0x1F)
                 imm = sext(imm, 12)
-                addr = self.r[rs1] + imm
-                self.mem[addr] = self.r[rs2] & 0xFFFFFFFF
+                byte_addr = (self.r[rs1] + imm) & 0xFFFFFFFF
+                word_addr = byte_addr >> 2
+                lane = byte_addr & 3
+                old = self.mem.get(word_addr, 0) & 0xFFFFFFFF
+                data = self.r[rs2] & 0xFFFFFFFF
+                if funct3 == 0:  # SB
+                    shift = lane * 8
+                    mask = 0xFF << shift
+                    value = (old & ~mask) | ((data & 0xFF) << shift)
+                elif funct3 == 1:  # SH
+                    shift = (lane >> 1) * 16
+                    mask = 0xFFFF << shift
+                    value = (old & ~mask) | ((data & 0xFFFF) << shift)
+                elif funct3 == 2:  # STR
+                    value = data
+                else:
+                    raise RuntimeError(f"unsupported store {w:08x}")
+                self.mem[word_addr] = value & 0xFFFFFFFF
                 self.pc += 1
             elif opcode == 0x63:
                 imm = (((w >> 31) & 1) << 12) | (((w >> 25) & 0x3F) << 5) | \
@@ -159,7 +191,7 @@ def load_text(obj):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("obj")
-    ap.add_argument("--test", choices=["vecadd", "matmul", "shift"], required=True)
+    ap.add_argument("--test", choices=["vecadd", "matmul", "shift", "mem"], required=True)
     args = ap.parse_args()
 
     program = load_text(args.obj)
@@ -180,7 +212,7 @@ def main():
             Cpu(program, mem, 0, 4, tid).run()
         got = [mem.get(8 + i, 0) for i in range(4)]
         want = [7, 10, 15, 22]
-    else:  # shift
+    elif args.test == "shift":
         data = [1, 0xFFFFFFF8, 0x7FFFFFFF, 0x80000000, 1, 2, 3, 4]
         for i, v in enumerate(data):
             mem[i] = v
@@ -196,6 +228,20 @@ def main():
         want += [u32(i32(v) >> (n & 31)) for v, n in zip(a, sh)]
         want += [u32(v) >> (n & 31) for v, n in zip(a, sh)]
         got = [mem.get(8 + i, 0) for i in range(24)]
+    else:  # mem
+        data = [(0x80017F80 + i * 0x10101) & 0xFFFFFFFF for i in range(4)]
+        for i, v in enumerate(data):
+            mem[i] = v
+        for tid in range(4):
+            Cpu(program, mem, 0, 4, tid).run()
+        want = []
+        want += [u32(i32(sext(v & 0xFF, 8))) for v in data]
+        want += [(v >> 8) & 0xFF for v in data]
+        want += [u32(i32(sext((v >> 16) & 0xFFFF, 16))) for v in data]
+        want += [(v >> 16) & 0xFFFF for v in data]
+        got = []
+        for base in (16, 20, 24, 28):
+            got += [mem.get(base + i, 0) for i in range(4)]
 
     print(f"{args.test}: got {got}, want {want}, {'OK' if got == want else 'FAIL'}")
     return 0 if got == want else 1
