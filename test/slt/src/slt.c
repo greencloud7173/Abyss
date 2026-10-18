@@ -20,16 +20,20 @@
  * give 1 (a signed compare would give 0).
  */
 void kernel(void) {
-  int i = __abyss_block_idx() * __abyss_block_dim() + __abyss_thread_idx();
-  int a = ABYSS_LD(0, i);
-  int b = ABYSS_LD(16, i);
+  int i = __abyss_linear_idx();
+  int *a_ptr = (int *)abyss_mem(0);
+  int *b_ptr = (int *)abyss_mem(16);
+  int *out = (int *)abyss_mem(32);
+
+  int a = a_ptr[i];
+  int b = b_ptr[i];
   unsigned ua = (unsigned)a;
   unsigned ub = (unsigned)b;
 
-  ABYSS_ST(32, i, a < b);
-  ABYSS_ST(48, i, ua < ub);
-  ABYSS_ST(64, i, a < 5);
-  ABYSS_ST(80, i, ua < 5u);
-  ABYSS_ST(96, i, a < -1);
-  ABYSS_ST(112, i, ua < 4294967295u);
+  out[i] = a < b;
+  out[4 + i] = ua < ub;
+  out[8 + i] = a < 5;
+  out[12 + i] = ua < 5u;
+  out[16 + i] = a < -1;
+  out[20 + i] = ua < 4294967295u;
 }

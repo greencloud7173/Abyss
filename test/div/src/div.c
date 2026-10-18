@@ -29,22 +29,27 @@
  * exercises the hardware remainder instructions.
  */
 void kernel(void) {
-  int i = __abyss_block_idx() * __abyss_block_dim() + __abyss_thread_idx();
-  int a = ABYSS_LD(0, i);
-  int b = ABYSS_LD(16, i);
-  int z = ABYSS_LD(32, i);
+  int i = __abyss_linear_idx();
+  int *a_ptr = (int *)abyss_mem(0);
+  int *b_ptr = (int *)abyss_mem(16);
+  int *z_ptr = (int *)abyss_mem(32);
+  int *out = (int *)abyss_mem(48);
+
+  int a = a_ptr[i];
+  int b = b_ptr[i];
+  int z = z_ptr[i];
   int az = a + z;
   unsigned ua = (unsigned)a;
   unsigned ub = (unsigned)b;
   unsigned uz = (unsigned)z;
   unsigned uaz = ua + uz;
 
-  ABYSS_ST(48, i, a / b);
-  ABYSS_ST(64, i, az % b);
-  ABYSS_ST(80, i, (int)(ua / ub));
-  ABYSS_ST(96, i, (int)(uaz % ub));
-  ABYSS_ST(112, i, a / z);
-  ABYSS_ST(128, i, az % z);
-  ABYSS_ST(144, i, (int)(ua / uz));
-  ABYSS_ST(160, i, (int)(uaz % uz));
+  out[i] = a / b;
+  out[4 + i] = az % b;
+  out[8 + i] = (int)(ua / ub);
+  out[12 + i] = (int)(uaz % ub);
+  out[16 + i] = a / z;
+  out[20 + i] = az % z;
+  out[24 + i] = (int)(ua / uz);
+  out[28 + i] = (int)(uaz % uz);
 }

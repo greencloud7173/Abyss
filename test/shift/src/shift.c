@@ -15,15 +15,19 @@
  *   words 28..31  (bytes 112..127) ua >> sh      (unsigned -> SRL)
  */
 void kernel(void) {
-  int i = __abyss_block_idx() * __abyss_block_dim() + __abyss_thread_idx();
-  int a = ABYSS_LD(0, i);
-  unsigned ua = (unsigned)a;
-  int sh = ABYSS_LD(16, i);
+  int i = __abyss_linear_idx();
+  int *a_ptr = (int *)abyss_mem(0);
+  int *sh_ptr = (int *)abyss_mem(16);
+  int *out = (int *)abyss_mem(32);
 
-  ABYSS_ST(32, i, a << 2);
-  ABYSS_ST(48, i, a >> 1);
-  ABYSS_ST(64, i, ua >> 1);
-  ABYSS_ST(80, i, a << sh);
-  ABYSS_ST(96, i, a >> sh);
-  ABYSS_ST(112, i, ua >> sh);
+  int a = a_ptr[i];
+  unsigned ua = (unsigned)a;
+  int sh = sh_ptr[i];
+
+  out[i] = a << 2;
+  out[4 + i] = a >> 1;
+  out[8 + i] = ua >> 1;
+  out[12 + i] = a << sh;
+  out[16 + i] = a >> sh;
+  out[20 + i] = ua >> sh;
 }
