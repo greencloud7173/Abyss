@@ -1,392 +1,299 @@
-# tiny-gpu
+# Abyss
 
-A minimal GPU implementation in Verilog optimized for learning about how GPUs work from the ground up.
+**一个从 RTL 一直做到编译器后端的 SIMD GPU。**
 
-Built with <15 files of fully documented Verilog, complete documentation on architecture & ISA, working matrix addition/multiplication kernels, and full support for kernel simulation & execution traces.
+起点是 [tiny-gpu](https://github.com/AdamMajmudar/tiny-gpu) 那个"用不到 15 个文件讲清 GPU 硬件"的教学项目。
+本项目把它的 ISA 换成了与 RISC-V **逐位兼容**的 **Abyss ISA**，并补齐了原生 LLVM/Clang 后端、
+完整的 ISA 手册和一套 C 驱动的硬件回归测试 —— 也就是说，现在写 GPU kernel 不再需要手写汇编，
+直接写 C、用 `clang --target=abyss` 编译即可。
 
-### Table of Contents
+| 层 | 内容 |
+| - | - |
+| RTL | SystemVerilog，2 个 core × 4 线程，每线程独立的 ALU / LSU / PC / 寄存器堆 |
+| ISA | 43 条指令，RV32I + M 兼容（仅 `RET` 为自定义），32 位定长编码 |
+| 编译器 | `clang --target=abyss`（LLVM 22 后端 + Clang target），`ld.lld` 链接 |
+| 验证 | cocotb + iverilog，7 个 C 内核用例，逐拍执行 trace |
 
-- [Overview](#overview)
-- [Architecture](#architecture)
-  - [GPU](#gpu)
-  - [Memory](#memory)
-  - [Core](#core)
-- [ISA](#isa)
-- [Execution](#execution)
-  - [Core](#core-1)
-  - [Thread](#thread)
-- [Kernels](#kernels)
-  - [Matrix Addition](#matrix-addition)
-  - [Matrix Multiplication](/tree/master?tab=readme-ov-file#matrix-multiplication)
-- [Simulation](#simulation)
-- [Advanced Functionality](#advanced-functionality)
-- [Next Steps](#next-steps)
 
-# Overview
+---
 
-If you want to learn how a CPU works all the way from architecture to control signals, there are many resources online to help you.
+## 目录
 
-GPUs are not the same.
+- [快速开始](#快速开始)
+- [仓库结构](#仓库结构)
+- [架构](#架构)
+- [Abyss ISA](#abyss-isa)
+- [C 工具链](#c-工具链)
+- [测试](#测试)
+- [与 tiny-gpu 的差异](#与-tiny-gpu-的差异)
+- [后续计划](#后续计划)
+- [致谢](#致谢)
 
-Because the GPU market is so competitive, low-level technical details for all modern architectures remain proprietary.
+---
 
-While there are lots of resources to learn about GPU programming, there's almost nothing available to learn about how GPU's work at a hardware level.
+## 快速开始
 
-The best option is to go through open-source GPU implementations like [Miaow](https://github.com/VerticalResearchGroup/miaow) and [VeriGPU](https://github.com/hughperkins/VeriGPU/tree/main) and try to figure out what's going on. This is challenging since these projects aim at being feature complete and functional, so they're quite complex.
+```bash
+# 依赖：iverilog、sv2v、cocotb(+python3)、ld.lld
+# 编译器与汇编器来自本机的 LLVM 构建（见「C 工具链」一节）
 
-This is why I built `tiny-gpu`!
-
-## What is tiny-gpu?
-
-> [!IMPORTANT]
->
-> **tiny-gpu** is a minimal GPU implementation optimized for learning about how GPUs work from the ground up.
->
-> Specifically, with the trend toward general-purpose GPUs (GPGPUs) and ML-accelerators like Google's TPU, tiny-gpu focuses on highlighting the general principles of all of these architectures, rather than on the details of graphics-specific hardware.
-
-With this motivation in mind, we can simplify GPUs by cutting out the majority of complexity involved with building a production-grade graphics card, and focus on the core elements that are critical to all of these modern hardware accelerators.
-
-This project is primarily focused on exploring:
-
-1. **Architecture** - What does the architecture of a GPU look like? What are the most important elements?
-2. **Parallelization** - How is the SIMD progamming model implemented in hardware?
-3. **Memory** - How does a GPU work around the constraints of limited memory bandwidth?
-
-After understanding the fundamentals laid out in this project, you can checkout the [advanced functionality section](#advanced-functionality) to understand some of the most important optimizations made in production grade GPUs (that are more challenging to implement) which improve performance.
-
-# Architecture
-
-<p float="left">
-  <img src="/docs/images/gpu.png" alt="GPU" width="48%">
-  <img src="/docs/images/core.png" alt="Core" width="48%">
-</p>
-
-## GPU
-
-tiny-gpu is built to execute a single kernel at a time.
-
-In order to launch a kernel, we need to do the following:
-
-1. Load global program memory with the kernel code
-2. Load data memory with the necessary data
-3. Specify the number of threads to launch in the device control register
-4. Launch the kernel by setting the start signal to high.
-
-The GPU itself consists of the following units:
-
-1. Device control register
-2. Dispatcher
-3. Variable number of compute cores
-4. Memory controllers for data memory & program memory
-5. Cache
-
-### Device Control Register
-
-The device control register usually stores metadata specifying how kernels should be executed on the GPU.
-
-In this case, the device control register just stores the `thread_count` - the total number of threads to launch for the active kernel.
-
-### Dispatcher
-
-Once a kernel is launched, the dispatcher is the unit that actually manages the distribution of threads to different compute cores.
-
-The dispatcher organizes threads into groups that can be executed in parallel on a single core called **blocks** and sends these blocks off to be processed by available cores.
-
-Once all blocks have been processed, the dispatcher reports back that the kernel execution is done.
-
-## Memory
-
-The GPU is built to interface with an external global memory. Here, data memory and program memory are separated out for simplicity.
-
-### Global Memory
-
-tiny-gpu data memory has the following specifications:
-
-- 32 bit addressability
-- 32 bit data
-
-tiny-gpu program memory has the following specifications:
-
-- 8 bit addressability (256 rows of program memory)
-- 16 bit data (each instruction is 16 bits as specified by the ISA)
-
-### Memory Controllers
-
-Global memory has fixed read/write bandwidth, but there may be far more incoming requests across all cores to access data from memory than the external memory is actually able to handle.
-
-The memory controllers keep track of all the outgoing requests to memory from the compute cores, throttle requests based on actual external memory bandwidth, and relay responses from external memory back to the proper resources.
-
-Each memory controller has a fixed number of channels based on the bandwidth of global memory.
-
-### Cache (WIP)
-
-The same data is often requested from global memory by multiple cores. Constantly access global memory repeatedly is expensive, and since the data has already been fetched once, it would be more efficient to store it on device in SRAM to be retrieved much quicker on later requests.
-
-This is exactly what the cache is used for. Data retrieved from external memory is stored in cache and can be retrieved from there on later requests, freeing up memory bandwidth to be used for new data.
-
-## Core
-
-Each core has a number of compute resources, often built around a certain number of threads it can support. In order to maximize parallelization, these resources need to be managed optimally to maximize resource utilization.
-
-In this simplified GPU, each core processed one **block** at a time, and for each thread in a block, the core has a dedicated ALU, LSU, PC, and register file. Managing the execution of thread instructions on these resources is one of the most challening problems in GPUs.
-
-### Scheduler
-
-Each core has a single scheduler that manages the execution of threads.
-
-The tiny-gpu scheduler executes instructions for a single block to completion before picking up a new block, and it executes instructions for all threads in-sync and sequentially.
-
-In more advanced schedulers, techniques like **pipelining** are used to stream the execution of multiple instructions subsequent instructions to maximize resource utilization before previous instructions are fully complete. Additionally, **warp scheduling** can be use to execute multiple batches of threads within a block in parallel.
-
-The main constraint the scheduler has to work around is the latency associated with loading & storing data from global memory. While most instructions can be executed synchronously, these load-store operations are asynchronous, meaning the rest of the instruction execution has to be built around these long wait times.
-
-### Fetcher
-
-Asynchronously fetches the instruction at the current program counter from program memory (most should actually be fetching from cache after a single block is executed).
-
-### Decoder
-
-Decodes the fetched instruction into control signals for thread execution.
-
-### Register Files
-
-Each thread has it's own dedicated set of register files. The register files hold the data that each thread is performing computations on, which enables the same-instruction multiple-data (SIMD) pattern.
-
-Importantly, each register file contains a few read-only registers holding data about the current block & thread being executed locally, enabling kernels to be executed with different data based on the local thread id.
-
-### ALUs
-
-Dedicated arithmetic-logic unit for each thread to perform computations. Handles the `ADD`, `SUB`, `MUL`, `DIV` arithmetic instructions.
-
-Also handles the `CMP` comparison instruction which actually outputs whether the result of the difference between two registers is negative, zero or positive - and stores the result in the `NZP` register in the PC unit.
-
-### LSUs
-
-Dedicated load-store unit for each thread to access global data memory.
-
-Handles the `LDR` & `STR` instructions - and handles async wait times for memory requests to be processed and relayed by the memory controller.
-
-### PCs
-
-Dedicated program-counter for each unit to determine the next instructions to execute on each thread.
-
-By default, the PC increments by 1 after every instruction.
-
-With the `BRnzp` instruction, the NZP register checks to see if the NZP register (set by a previous `CMP` instruction) matches some case - and if it does, it will branch to a specific line of program memory. _This is how loops and conditionals are implemented._
-
-Since threads are processed in parallel, tiny-gpu assumes that all threads "converge" to the same program counter after each instruction - which is a naive assumption for the sake of simplicity.
-
-In real GPUs, individual threads can branch to different PCs, causing **branch divergence** where a group of threads threads initially being processed together has to split out into separate execution.
-
-# ISA
-
-![ISA](/docs/images/isa.png)
-
-tiny-gpu implements a simple 11 instruction ISA built to enable simple kernels for proof-of-concept like matrix addition & matrix multiplication (implementation further down on this page).
-
-For these purposes, it supports the following instructions:
-
-- `BRnzp` - Branch instruction to jump to another line of program memory if the NZP register matches the `nzp` condition in the instruction.
-- `CMP` - Compare the value of two registers and store the result in the NZP register to use for a later `BRnzp` instruction.
-- `ADD`, `SUB`, `MUL`, `DIV` - Basic arithmetic operations to enable tensor math.
-- `LDR` - Load data from global memory.
-- `STR` - Store data into global memory.
-- `CONST` - Load a constant value into a register.
-- `RET` - Signal that the current thread has reached the end of execution.
-
-Each register is specified by 4 bits, meaning that there are 16 total registers. The first 13 register `R0` - `R12` are free registers that support read/write. The last 3 registers are special read-only registers used to supply the `%blockIdx`, `%blockDim`, and `%threadIdx` critical to SIMD.
-
-# Execution
-
-### Core
-
-Each core follows the following control flow going through different stages to execute each instruction:
-
-1. `FETCH` - Fetch the next instruction at current program counter from program memory.
-2. `DECODE` - Decode the instruction into control signals.
-3. `REQUEST` - Request data from global memory if necessary (if `LDR` or `STR` instruction).
-4. `WAIT` - Wait for data from global memory if applicable.
-5. `EXECUTE` - Execute any computations on data.
-6. `UPDATE` - Update register files and NZP register.
-
-The control flow is laid out like this for the sake of simplicity and understandability.
-
-In practice, several of these steps could be compressed to be optimize processing times, and the GPU could also use **pipelining** to stream and coordinate the execution of many instructions on a cores resources without waiting for previous instructions to finish.
-
-### Thread
-
-![Thread](/docs/images/thread.png)
-
-Each thread within each core follows the above execution path to perform computations on the data in it's dedicated register file.
-
-This resembles a standard CPU diagram, and is quite similar in functionality as well. The main difference is that the `%blockIdx`, `%blockDim`, and `%threadIdx` values lie in the read-only registers for each thread, enabling SIMD functionality.
-
-# Kernels
-
-I wrote a matrix addition and matrix multiplication kernel using my ISA as a proof of concept to demonstrate SIMD programming and execution with my GPU. The test files in this repository are capable of fully simulating the execution of these kernels on the GPU, producing data memory states and a complete execution trace.
-
-### Matrix Addition
-
-This matrix addition kernel adds two 1 x 8 matrices by performing 8 element wise additions in separate threads.
-
-This demonstration makes use of the `%blockIdx`, `%blockDim`, and `%threadIdx` registers to show SIMD programming on this GPU. It also uses the `LDR` and `STR` instructions which require async memory management.
-
-`matadd.asm`
-
-```asm
-.threads 8
-.data 0 1 2 3 4 5 6 7          ; matrix A (1 x 8)
-.data 0 1 2 3 4 5 6 7          ; matrix B (1 x 8)
-
-MUL R0, %blockIdx, %blockDim
-ADD R0, R0, %threadIdx         ; i = blockIdx * blockDim + threadIdx
-
-CONST R1, #0                   ; baseA (matrix A base address)
-CONST R2, #8                   ; baseB (matrix B base address)
-CONST R3, #16                  ; baseC (matrix C base address)
-
-ADD R4, R1, R0                 ; addr(A[i]) = baseA + i
-LDR R4, R4                     ; load A[i] from global memory
-
-ADD R5, R2, R0                 ; addr(B[i]) = baseB + i
-LDR R5, R5                     ; load B[i] from global memory
-
-ADD R6, R4, R5                 ; C[i] = A[i] + B[i]
-
-ADD R7, R3, R0                 ; addr(C[i]) = baseC + i
-STR R7, R6                     ; store C[i] in global memory
-
-RET                            ; end of kernel
+make test matadd      # 跑单个用例
+make test CASE=matadd # 等价写法
+make test_matadd      # 等价写法
+make sim              # 只构建 RTL 仿真器（build/sim.vvp）
+make compile          # 只做 sv2v 转换（SystemVerilog → Verilog）
 ```
 
-### Matrix Multiplication
+运行结束后日志落在 `test/logs/`，里面包含初始数据内存、逐拍执行 trace 和最终数据内存。
 
-The matrix multiplication kernel multiplies two 2x2 matrices. It performs element wise calculation of the dot product of the relevant row and column and uses the `CMP` and `BRnzp` instructions to demonstrate branching within the threads (notably, all branches converge so this kernel works on the current tiny-gpu implementation).
+工具链路径可以在命令行覆盖：
 
-`matmul.asm`
-
-```asm
-.threads 4
-.data 1 2 3 4                  ; matrix A (2 x 2)
-.data 1 2 3 4                  ; matrix B (2 x 2)
-
-MUL R0, %blockIdx, %blockDim
-ADD R0, R0, %threadIdx         ; i = blockIdx * blockDim + threadIdx
-
-CONST R1, #1                   ; increment
-CONST R2, #2                   ; N (matrix inner dimension)
-CONST R3, #0                   ; baseA (matrix A base address)
-CONST R4, #4                   ; baseB (matrix B base address)
-CONST R5, #8                   ; baseC (matrix C base address)
-
-DIV R6, R0, R2                 ; row = i // N
-MUL R7, R6, R2
-SUB R7, R0, R7                 ; col = i % N
-
-CONST R8, #0                   ; acc = 0
-CONST R9, #0                   ; k = 0
-
-LOOP:
-  MUL R10, R6, R2
-  ADD R10, R10, R9
-  ADD R10, R10, R3             ; addr(A[i]) = row * N + k + baseA
-  LDR R10, R10                 ; load A[i] from global memory
-
-  MUL R11, R9, R2
-  ADD R11, R11, R7
-  ADD R11, R11, R4             ; addr(B[i]) = k * N + col + baseB
-  LDR R11, R11                 ; load B[i] from global memory
-
-  MUL R12, R10, R11
-  ADD R8, R8, R12              ; acc = acc + A[i] * B[i]
-
-  ADD R9, R9, R1               ; increment k
-
-  CMP R9, R2
-  BRn LOOP                    ; loop while k < N
-
-ADD R9, R5, R0                 ; addr(C[i]) = baseC + i
-STR R9, R8                     ; store C[i] in global memory
-
-RET                            ; end of kernel
+```bash
+make -C test/matadd ABYSS_CLANG=/path/to/clang LLVM_MC=/path/to/llvm-mc
 ```
 
-# Simulation
+---
 
-tiny-gpu is setup to simulate the execution of both of the above kernels. Before simulating, you'll need to install [iverilog](https://steveicarus.github.io/iverilog/usage/installation.html) and [cocotb](https://docs.cocotb.org/en/stable/install.html):
+## 仓库结构
 
-- Install Verilog compilers with `brew install icarus-verilog` and `pip3 install cocotb`
-- Download the latest version of sv2v from https://github.com/zachjs/sv2v/releases, unzip it and put the binary in $PATH.
-- Run `mkdir build` in the root directory of this repository.
+```
+src/                  RTL（SystemVerilog）
+  gpu.sv              顶层：core 数组 + 内存控制器 + DCR
+  core.sv             fetcher / decoder / scheduler / 线程数组
+  scheduler.sv        8 状态控制流（IDLE → FETCH → DECODE → REQUEST → WAIT → EXECUTE → UPDATE → DONE）
+  fetcher.sv          PC 取指
+  decoder.sv          opcode → funct3 → funct7 三级译码，产出全部控制信号
+  alu.sv              算术 / 移位 / 比较 / 位运算 / 除法器
+  lsu.sv              字节地址 → 字地址 + lane，窄访存扩展与写掩码
+  pc.sv               分支条件、PC 相对跳转、JAL/JALR 链接值
+  registers.sv        32 × 32 位寄存器堆（x0 恒 0）
+  dispatch.sv         block 分配与 done
+  dcr.sv              Device Control Register（写入线程数）
+  controller.sv       内存请求仲裁
 
-Once you've installed the pre-requisites, you can run the kernel simulations with `make test_matadd` and `make test_matmul`.
+docs/isa.md           Abyss ISA 手册（唯一副本）
+docs/images/          架构图与 trace 截图
+tools/
+  abyss.h             内核侧接口：abyss_mem()、blockIdx/threadIdx、矩阵类型与运算宏
+  run_abyss.py        独立的 ISA 功能模拟器（不开 RTL 时快速自检）
+  examples/           示例 C 内核
+  README.md           C 工具链与测试的详细说明
+test/
+  helpers/            cocotb 脚手架（内存模型、setup、trace 反汇编）
+  common.mk           所有用例共用的构建规则
+  <case>/             每个用例自带 Makefile + src/ + test_<case>.py
+abyss-vivado/         Vivado 工程
+gds/                  GDSII 布局结果
+```
 
-Executing the simulations will output a log file in `test/logs` with the initial data memory state, complete execution trace of the kernel, and final data memory state.
+---
 
-If you look at the initial data memory state logged at the start of the logfile for each, you should see the two start matrices for the calculation, and in the final data memory at the end of the file you should also see the resultant matrix.
+## 架构
 
-Below is a sample of the execution traces, showing on each cycle the execution of every thread within every core, including the current instruction, PC, register values, states, etc.
+![GPU](docs/images/gpu.png)
+
+一个 GPU 由 **2 个 core** 组成，每个 core 负责一个 block、**4 个线程**（`THREADS_PER_BLOCK`）。
+同一 core 内的 4 个线程**共享一个 fetcher 和一个 decoder**，但各自拥有独立的 ALU、LSU、PC 和寄存器堆 ——
+这就是 SIMD 在硬件上的样子：一条指令，四个数据通路同时执行。
+
+![Core](docs/images/core.png)
+
+关键点：
+
+1. **控制流是 8 个状态的硬状态机**，不用流水线。所有线程每拍收敛到同一 PC（不支持分支发散）。
+2. **内存是外部的、异步的、多通道的**：每个 core 的 4 个 LSU 通过 controller 共享 4 条数据通道，
+   内存接口只有 `valid / address / data / ready`，外加 `write_mask` 4 位字节使能。
+3. **数据内存按字节寻址**。`LSU` 负责 `byte_address >>> 2` 得到字地址、`byte_address[1:0]` 得到 lane，
+   窄读时做符号/零扩展，窄写时把数据移进 lane 并生成字节掩码 —— 这样 C 里的 `char`/`short` 和指针演算才成立。
+4. **`x0` 恒为 0**，`R29/R30/R31` 是只读的 `%blockIdx` / `%blockDim` / `%threadIdx`。
+
+![Thread](docs/images/thread.png)
+
+---
+
+## Abyss ISA
+
+完整的手册在 **[`docs/isa.md`](docs/isa.md)**（位域、编码速查、每条指令的控制信号、版本历史都在里面）。
+概要如下：
+
+| 类型 | 条数 | 指令 |
+| - | - | - |
+| R | 15 | `ADD` `SUB` `MUL` `DIV` `DIVU` `REM` `REMU` `SLT` `SLTU` `AND` `OR` `XOR` `SLL` `SRL` `SRA` |
+| I | 15 | `ADDI` `SLTI` `SLTIU` `ANDI` `ORI` `XORI` `LDR` `LB` `LH` `LBU` `LHU` `SLLI` `SRLI` `SRAI` `JALR` |
+| S | 3 | `STR` `SB` `SH` |
+| B | 6 | `BEQ` `BNE` `BLT` `BGE` `BLTU` `BGEU` |
+| U | 2 | `LUI` `AUIPC` |
+| J | 1 | `JAL` |
+| custom-2 | 1 | `RET`（线程结束） |
+
+除 `RET` 外，所有指令的编码与 RISC-V 官方规范**逐位一致**（`opcode` / `funct3` / `funct7` 完全对齐，
+包括 M 扩展 `funct7 = 0000001` 与 `funct3 100/110/111` 的逻辑运算复用）。这意味着：
+
+- 可以用 `llvm-mc -arch=abyss` 汇编，也可以用 RISC-V 工具链交叉验证编码；
+- 编译器只需要把 RISC-V 那套 lowering 搬过来，几乎没有"新语义"要发明。
+
+几条实现上的约定：
+
+- **数据按字节寻址**，`LDR rd, 4(rs1)` 是"字节 4"（第 1 个字），不是"第 4 个字"。
+- **PC 按指令条数计**，但所有 PC 相关量（分支偏移、`JAL`/`JALR` 链接值、`AUIPC`）按 **字节地址** 语义 ——
+  `PC_byte = current_pc << 2`，换算只是接线。
+- **除零不 trap**：`DIV`/`DIVU` 返回全 1，`REM`/`REMU` 返回被除数，`INT_MIN / -1` 回绕；
+  对齐错误也不 trap（按所在字 + lane 截断处理）。这些都记在手册第 9 章。
+
+---
+
+## C 工具链
+
+这是一条**真正的编译器链路**，不是文本替换：
+
+```
+src/<case>.c
+  │  clang --target=abyss -O2 -fno-pic -fno-delete-null-pointer-checks -nostdlib -c
+  ▼
+build/<case>.o ──┐
+                 ├─ ld.lld --image-base=0 -Ttext=0 -e _start
+src/start.s      │
+  │ llvm-mc      │
+  ▼              │
+build/start.o ───┘
+  ▼
+build/<case>.elf
+  │  llvm-objcopy -O binary --only-section=.text
+  ▼
+build/<case>.bin  →  cocotb 载入 program memory → RTL 仿真
+```
+
+### LLVM 后端
+
+后端源码在 `llvm-project` 的 `llvm/lib/Target/Abyss/`（分支 `abyss`，基于 LLVM 22.1.8）：
+
+| 文件 | 作用 |
+| - | - |
+| `Abyss.td` / `AbyssRegisterInfo.td` | target 与寄存器描述 |
+| `AbyssInstrFormats.td` | R/I/S/B/U/J 六种指令格式的 TableGen 类 |
+| `AbyssInstrInfo.td` | 43 条指令的编码与汇编语法 |
+| `AbyssCodeGen.cpp` | 指令选择、调用约定、帧管理 |
+| `AbyssMCAsmInfo.h` / `MCTargetDesc/` / `AsmParser/` | MC 层、汇编器、目标文件写出 |
+| `AbyssTargetMachineImpl.cpp` / `AbyssTargetInfo.cpp` | TargetMachine 与 TargetInfo |
+
+### Clang 移植
+
+`clang/lib/Basic/Targets/Abyss.cpp` 提供 `clang --target=abyss` 所需的 TargetInfo（数据类型宽度、
+`__SIZEOF_*`、预定义宏等），配合上表的 CodeGen 即可直接编译 freestanding 的 C 内核。
+
+### 重新构建
+
+```bash
+ninja -C ~/llvm-project/build llvm-mc llvm-objcopy   # 汇编器 + objcopy
+ninja -C ~/llvm-project/build-abyss-clang clang      # Abyss Clang
+```
+
+> ⚠️ 改过 `.td` 之后**必须**重跑 `ninja llvm-mc`，否则汇编器仍会报 `unrecognized instruction mnemonic`。
+
+### 内核侧怎么写
+
+```c
+#include "abyss.h"
+
+void kernel(void) {
+  int i = __abyss_linear_idx();   // blockIdx * blockDim + threadIdx
+
+  int *A = (int *)abyss_mem(0);      // 字节地址 0
+  int *B = (int *)abyss_mem(32);
+  int *C = (int *)abyss_mem(64);
+
+  C[i] = A[i] + B[i];
+}
+```
+
+矩阵还可以用 `ABYSS_MATRIX` 声明带维度/元素类型的类型，再用 `ABYSS_MAT_ADD` / `ABYSS_MAT_MUL`
+让 `_Static_assert` 在**编译期**检查维度与元素类型（详见 [`tools/README.md`](tools/README.md)）。
+
+支持的 C 子集：`int`/`unsigned`/`char`/`short`、算术、位运算、移位、除余、比较、分支、循环、
+`phi`/`select`、`alloca`、函数调用（≤8 参数）。不支持浮点、64 位、全局变量、PIC、libc、可变参数。
+
+---
+
+## 测试
+
+每个用例的流程是"写 C → 编译链接 → 载入 RTL → 跑完 `done` → 用 Python 参考模型逐字比对内存"。
+
+| 用例 | 覆盖内容 |
+| - | - |
+| `matadd` | 4 线程矩阵加法，最基本的 SIMD 通路 |
+| `matmul` | 2×2 矩阵乘法，嵌套循环 + 偏移寻址 |
+| `shift` | `SLL`/`SRL`/`SRA` 与立即数版，含移位量 mod 32 |
+| `mem` | 字节/半字访存、lane 选择、写掩码合并 |
+| `div` | `DIV`/`DIVU`/`REM`/`REMU` + 四种除零情况 |
+| `slt` | `SLT`/`SLTU`/`SLTI`/`SLTIU`，含负立即数与无符号比较 |
+| `logic` | `AND`/`OR`/`XOR` 与立即数版、`~a`、位域提取 |
+
+全部用例通过（cocotb 2.1 + Icarus Verilog 13），sv2v 与 iverilog 零告警。
+仿真可以在 `test/logs/` 里看到逐拍 trace：
 
 ![execution trace](docs/images/trace.png)
 
-**For anyone trying to run the simulation or play with this repo, please feel free to DM me on [twitter](https://twitter.com/majmudaradam) if you run into any issues - I want you to get this running!**
+---
 
-# Advanced Functionality
+## 与 tiny-gpu 的差异
 
-For the sake of simplicity, there were many additional features implemented in modern GPUs that heavily improve performance & functionality that tiny-gpu omits. We'll discuss some of those most critical features in this section.
+| 项 | tiny-gpu | Abyss |
+| - | - | - |
+| 指令集 | 11 条自定义指令，16 位定长 | **43 条**，32 位定长，RV32I+M 逐位兼容 |
+| 寄存器 | 16 个（4 位编号），`R0`–`R12` 可写 | **32 个**（5 位编号），`x0` 恒 0 |
+| 访存 | 字寻址，无偏移 | **字节寻址** + imm12 偏移 + 字节/半字 × 符号/零扩展 + 写掩码 |
+| 分支 | `CMP` 写 NZP 寄存器，再由 `BRnzp` 判断（两条指令） | **B 型单条指令内比较**，`JAL`/`JALR` 调用返回 |
+| 算术 | `ADD` `SUB` `MUL` `DIV` | 再加 `DIVU` `REM` `REMU`、移位、比较、位运算 |
+| 常量 | `CONST imm12` | `LUI` + `AUIPC` + `ADDI`（`LI` 为伪指令） |
+| 写 kernel | 手写汇编 | **写 C，`clang --target=abyss` 编译** |
+| 除零 | 未定义（Verilog `/0` 产生 `x`，污染整条数据通路） | 按 RISC-V 返回定值 |
 
-### Multi-layered Cache & Shared Memory
+原始项目保留了完整的架构讲解（cache、warp、memory coalescing 等进阶话题），
+那些讨论对本项目依然适用，这里不再重复。
 
-In modern GPUs, multiple different levels of caches are used to minimize the amount of data that needs to get accessed from global memory. tiny-gpu implements only one cache layer between individual compute units requesting memory and the memory controllers which stores recent cached data.
+---
 
-Implementing multi-layered caches allows frequently accessed data to be cached more locally to where it's being used (with some caches within individual compute cores), minimizing load times for this data.
+## 后续计划
 
-Different caching algorithms are used to maximize cache-hits - this is a critical dimension that can be improved on to optimize memory access.
+- [ ] `MULH`/`MULHU`/`MULHSU`（需要 64 位乘法器，为 64 位整数运算铺路）
+- [ ] 指令 cache
+- [ ] 分支发散支持（需要 PC 栈 + 重聚机制）
+- [ ] memory coalescing
+- [ ] 流水线与 warp 调度
+- [ ] 后端支持向量类型，把矩阵宏换成 `__attribute__((matrix_type))` + Clang builtins
+- [ ] Tiny Tapeout 流片适配
+- [ ] Vivado环境移植
 
-Additionally, GPUs often use **shared memory** for threads within the same block to access a single memory space that can be used to share results with other threads.
+---
 
-### Memory Coalescing
+## 致谢
 
-Another critical memory optimization used by GPUs is **memory coalescing.** Multiple threads running in parallel often need to access sequential addresses in memory (for example, a group of threads accessing neighboring elements in a matrix) - but each of these memory requests is put in separately.
+### 原项目
 
-Memory coalescing is used to analyzing queued memory requests and combine neighboring requests into a single transaction, minimizing time spent on addressing, and making all the requests together.
+本项目脱胎于 **tiny-gpu**，作者 **Adam Majmudar**
+（<https://github.com/AdamMajmudar/tiny-gpu>）。
 
-### Pipelining
+调度器的 8 状态控制流、共享 fetcher/decoder 的 SIMD 组织方式、多核 + 多通道异步内存接口、
+以及 cocotb 测试脚手架的最初形态，都直接继承自该项目。它"用不到 15 个文件把 GPU 讲清楚"的
+取舍，是这个项目能够继续往上加 ISA 和编译器的前提 —— 在此郑重致谢。
 
-In the control flow for tiny-gpu, cores wait for one instruction to be executed on a group of threads before starting execution of the next instruction.
+### AI 协作
 
-Modern GPUs use **pipelining** to stream execution of multiple sequential instructions at once while ensuring that instructions with dependencies on each other still get executed sequentially.
+本项目以下三块工作使用了 **DeepSeek**（深度求索）的模型作为编程助手：
 
-This helps to maximize resource utilization within cores as resources are not sitting idle while waiting (ex: during async memory requests).
+1. **Abyss LLVM 后端** —— `llvm/lib/Target/Abyss/`：TableGen 指令/寄存器/格式描述、MC 层与汇编器、
+   指令选择与调用约定。
+2. **Clang 移植** —— `clang/lib/Basic/Targets/Abyss.cpp` 等，让 `clang --target=abyss` 能直接编译
+   C 内核并产出可链接的目标文件。
+3. **RTL 测试** —— 7 个 cocotb 用例的 C 内核、参考模型与联调排错（包括发现并修复
+   Verilog 有符号性导致的 `div` 静默变 `divu`、LLVM 把 `a/b`+`a%b` 折叠成 `div`+`mul`+`sub`
+   导致 `rem` 测不到这类问题）。
 
-### Warp Scheduling
+架构取舍、ISA 决策与最终代码评审由人类完成；AI 承担实现、查错与文档同步。
 
-Another strategy used to maximize resource utilization on course is **warp scheduling.** This approach involves breaking up blocks into individual batches of theads that can be executed together.
+---
 
-Multiple warps can be executed on a single core simultaneously by executing instructions from one warp while another warp is waiting. This is similar to pipelining, but dealing with instructions from different threads.
+## 许可与上游
 
-### Branch Divergence
-
-tiny-gpu assumes that all threads in a single batch end up on the same PC after each instruction, meaning that threads can be executed in parallel for their entire lifetime.
-
-In reality, individual threads could diverge from each other and branch to different lines based on their data. With different PCs, these threads would need to split into separate lines of execution, which requires managing diverging threads & paying attention to when threads converge again.
-
-### Synchronization & Barriers
-
-Another core functionality of modern GPUs is the ability to set **barriers** so that groups of threads in a block can synchronize and wait until all other threads in the same block have gotten to a certain point before continuing execution.
-
-This is useful for cases where threads need to exchange shared data with each other so they can ensure that the data has been fully processed.
-
-# Next Steps
-
-Updates I want to make in the future to improve the design, anyone else is welcome to contribute as well:
-
-- [ ] Add a simple cache for instructions
-- [ ] Build an adapter to use GPU with Tiny Tapeout 7
-- [ ] Add basic branch divergence
-- [ ] Add basic memory coalescing
-- [ ] Add basic pipelining
-- [ ] Optimize control flow and use of registers to improve cycle time
-- [ ] Write a basic graphics kernel or add simple graphics hardware to demonstrate graphics functionality
-
-**For anyone curious to play around or make a contribution, feel free to put up a PR with any improvements you'd like to add 😄**
+本仓库是基于 tiny-gpu 的衍生作品，原项目版权归 Adam Majmudar 所有。
+本仓库目前未单独声明许可证；如需再分发，请同时遵守原项目的条款。
