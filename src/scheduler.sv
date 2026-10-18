@@ -48,6 +48,22 @@ module scheduler #(
         EXECUTE = 3'b101,     // Execute ALU and PC calculations
         UPDATE = 3'b110,      // Update registers and PC
         DONE = 3'b111;        // Done executing this block
+
+    // Is any thread still waiting for its memory request?  (REQUESTING / WAITING)
+    // Computed as an OR-reduce so it synthesizes to a single wide gate instead of
+    // a priority-chained loop inside the clocked block.
+    wire [THREADS_PER_BLOCK-1:0] lsu_busy;
+    genvar g;
+    generate
+        for (g = 0; g < THREADS_PER_BLOCK; g = g + 1) begin : lsu_busy_gen
+            assign lsu_busy[g] = (lsu_state[g] == 2'b01) || (lsu_state[g] == 2'b10);
+        end
+    endgenerate
+    wire any_lsu_waiting = |lsu_busy;
+
+    // Does this instruction touch data memory at all?  ALU / branch / jump /
+    // LUI / AUIPC / RET do not, so they have nothing to wait for.
+    wire needs_memory = decoded_mem_read_enable || decoded_mem_write_enable;
     
     always @(posedge clk) begin 
         if (reset) begin
@@ -76,20 +92,18 @@ module scheduler #(
                     core_state <= REQUEST;
                 end
                 REQUEST: begin 
-                    // Request is synchronous so we move on after one cycle
-                    core_state <= WAIT;
+                    // The LSUs latch their request during this cycle (rs/rt are
+                    // sampled here too).  Instructions that do not touch data
+                    // memory have nothing to wait for, so they skip WAIT entirely:
+                    // one cycle saved per ALU / branch / jump / LUI / AUIPC / RET.
+                    if (needs_memory) begin
+                        core_state <= WAIT;
+                    end else begin
+                        core_state <= EXECUTE;
+                    end
                 end
                 WAIT: begin
                     // Wait for all LSUs to finish their request before continuing
-                    reg any_lsu_waiting = 1'b0;
-                    for (int i = 0; i < THREADS_PER_BLOCK; i++) begin
-                        // Make sure no lsu_state = REQUESTING or WAITING
-                        if (lsu_state[i] == 2'b01 || lsu_state[i] == 2'b10) begin
-                            any_lsu_waiting = 1'b1;
-                            break;
-                        end
-                    end
-
                     // If no LSU is waiting for a response, move onto the next stage
                     if (!any_lsu_waiting) begin
                         core_state <= EXECUTE;

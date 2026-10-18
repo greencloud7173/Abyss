@@ -326,14 +326,15 @@ RISC-V 保留的 custom 段分配(便于将来扩展,均已避开官方指令编
 | `001` | FETCH | fetcher 读取 `instruction[current_pc]` |
 | `010` | DECODE | decoder 锁存字段、产生控制信号 |
 | `011` | REQUEST | 寄存器堆采样 `rs`/`rt`;`LDR`/`STR` 在此发起内存请求 |
-| `100` | WAIT | 若有 LSU 处于 REQUESTING/WAITING 就继续等待(内存延迟) |
+| `100` | WAIT | 若有 LSU 处于 REQUESTING/WAITING 就继续等待(内存延迟);**非访存指令跳过本态** |
 | `101` | EXECUTE | ALU 运算 / 比较;PC 单元算分支、跳转与 `pc_result` |
 | `110` | UPDATE | 写回 rd(ALU / LSU / PC 单元三种来源)、更新 PC |
 | `111` | DONE | 本 block 结束(遇到 `RET`) |
 
 写汇编 / 看波形时要记住的几条:
 
-1. 每条指令都走完整流程(`LDR`/`STR` 的 `WAIT` 因内存延迟更长),因此相邻指令之间天然隔开约 5 拍。
+1. 每条指令都走完整流程(`LDR`/`STR` 的 `WAIT` 因内存延迟更长),因此相邻指令之间天然隔开约 5 拍;
+   `ALU` / 分支 / `JAL` / `LUI` / `AUIPC` / `RET` 这类不访问数据内存的指令在 `REQUEST` 之后**直接进 `EXECUTE`**(见 6.2)。
 2. `rs`/`rt` 在 `REQUEST` 采样 —— 指令用的是"它到达 REQUEST 那一刻"的寄存器值,**紧邻的写后读依赖也安全**。
 3. `WAIT` 会等到**所有**线程的 LSU 都不在 REQUESTING/WAITING 才进 `EXECUTE`(SIMD 锁步)。
 4. 只在 `UPDATE` 写:运算类 / `LDR` / `LUI` / `AUIPC` / `JAL` 写 rd,分支与跳转改 PC;`STR` 不写寄存器。
@@ -377,6 +378,29 @@ RISC-V 保留的 custom 段分配(便于将来扩展,均已避开官方指令编
 面积代价:每行 `32 + TAG + 1` 位,128 行约 7.4 kbit/core。若内层循环比 `CACHE_LINES` 长,
 直接映射会冲突抖动(raster 的 92 条指令循环在 `CACHE_LINES = 32` 时几乎全部未命中),
 此时把 `CACHE_LINES` 调大或改成组相联即可。
+
+### 6.2 跳过 WAIT:非访存指令不再空等(2026-10)
+
+`WAIT` 原本对**每条**指令都要待一拍,即使它根本不碰内存。现在 `REQUEST` 之后先看
+`decoded_mem_read_enable || decoded_mem_write_enable`:
+
+| 指令 | 旧路径 | 新路径 |
+| - | - | - |
+| `LDR`/`LB`/`LH`/`LBU`/`LHU`/`STR`/`SB`/`SH` | `REQUEST → WAIT → EXECUTE` | 不变 |
+| `ADD`/`DIV`/`SLT`/`AND`/移位/分支/`JAL`/`JALR`/`LUI`/`AUIPC`/`RET` | `REQUEST → WAIT → EXECUTE` | **`REQUEST → EXECUTE`**(省 1 拍) |
+
+顺手把 `any_lsu_waiting` 从"clocked block 里带 `break` 的 for 循环"改成模块级
+**OR-reduce**(`wire any_lsu_waiting = |lsu_busy;`),综合出来是一条宽或门,不再是串行优先级链。
+
+实测(raster16x16,采样 profiler):
+
+| 指标 | 优化前 | 优化后 |
+| - | - | - |
+| 总拍数 | 10,633 | **9,270**(−12.8%) |
+| `WAIT` 占忙时 | 25.3%(1.85 拍/指令) | **14.3%**(0.91 拍/指令) |
+| 剩余 `WAIT` | 每条指令 1 拍 | 只剩访存指令在等 LSU |
+
+影响面:访存比例越高的内核收益越小(标量访存型内核约 −7%,光栅这类计算型约 −14%)。
 
 ## 7. 编码速查
 
