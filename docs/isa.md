@@ -12,7 +12,7 @@
 ## 1. 概览
 
 - **定长 32 位指令**,格式与译码风格**对齐 RISC-V**;数据与地址 32 位;每个线程 32 个寄存器。
-- **执行模型(SIMD)**:一个 core 处理一个 block;block 内 16 个线程(`THREADS_PER_BLOCK`)共享 1 个 fetcher + 1 个 decoder,
+- **执行模型(SIMD)**:一个 core 处理一个 block;block 内 8 个线程(`THREADS_PER_BLOCK`,可配 16)共享 1 个 fetcher + 1 个 decoder,
   但每个线程各有独立的 ALU、LSU、PC、寄存器堆 —— 同一拍所有线程执行同一条指令。
 - **指令集**:43 条 —— R 型 15 条(`ADD` `SUB` `MUL` `DIV` `DIVU` `REM` `REMU` `SLT` `SLTU` `AND` `OR` `XOR` `SLL` `SRL` `SRA`)、
   I 型 15 条(`ADDI` `SLTI` `SLTIU` `ANDI` `ORI` `XORI` `LDR` `JALR` `SLLI` `SRLI` `SRAI` `LB` `LH` `LBU` `LHU`)、
@@ -313,7 +313,7 @@ RISC-V 保留的 custom 段分配(便于将来扩展,均已避开官方指令编
 - 分支与比较是同一条指令 ⇒ 条件跳转**不再需要**“标志位先由另一条指令写入”(旧的 `CMP` + `BRnzp` 要隔一条)。
 - 实现细节(`src/pc.sv`):`rs_signed < rt_signed`(有符号)与 `rs < rt`(无符号)两个比较结果 + 一个 `case` 选条件;
   `>>> 2`、`PC*4` 与符号扩展都是接线,没有额外算术逻辑。
-- 无分支发散:一个 block 的 16 个线程各算各的条件,实际 PC 取**最后一个线程**的值
+- 无分支发散:一个 block 的 8 个线程各算各的条件,实际 PC 取**最后一个线程**的值
   (`current_pc <= next_pc[THREADS_PER_BLOCK-1]`),所以内核里要保持各线程控制流一致。
 
 ## 6. 执行模型与流水阶段
@@ -806,14 +806,14 @@ instruction mnemonic"。
    `ORI R8,R1,#15 = 0x00F0E413`、`XORI R9,R1,#-1 = 0xFFF0C493`。
 5. 至此 **RV32I + M 的整数指令全部齐全**(除 `FENCE`/`ECALL`/`EBREAK` 这类系统指令)。
 
-### 加宽 SIMD:8 → 16 线程/块 + 8 条数据通道(2026-10)
+### SIMD 宽度:默认 8 lane,16 lane 可配置(2026-10)
 
-| 项 | 改动前 | 现在 |
+| 项 | 默认(FPGA 现实) | 可选(仿真更快) |
 | - | - | - |
-| `THREADS_PER_BLOCK`(`gpu.sv`) | 8 | **16** |
-| `DATA_MEM_NUM_CHANNELS` | 4 | **8**(保持 2 线程/通道的比例,避免加宽后新的访存仲裁等待) |
-| 总 lane 数 | 4 core × 8 = **32** | 4 core × 16 = **64** |
-| 测试 harness | `channels=4` 硬编码 | 从 `dut.data_mem_read_valid` 位宽推导 |
+| `THREADS_PER_BLOCK`(`gpu.sv`) | **8** | 16 |
+| `DATA_MEM_NUM_CHANNELS` | **4** | 8(保持 2 线程/通道的比例) |
+| 总 lane 数 | 4 core × 8 = **32** | 4 core × 16 = 64 |
+| 测试 harness | 通道数从 `dut.data_mem_read_valid` 位宽推导,换宽度不用改 Python | 同左 |
 
 为什么加宽能提速:整条流水线是**控制开销主导**的(每条指令约 6.4 拍,与 lane 数无关),
 所以一次取指/译码喂的 lane 越多越划算。对固定线程数的内核:
@@ -833,9 +833,16 @@ $$\text{墙钟} \approx \frac{\text{线程数} / (\text{core 数} \times \text{l
 | `matadd`(4 线程) | 4 | 1.478e7 ns | 1.390e7 ns | −6% |
 | `matmul`/`shift`/`mem`/`div`/`slt`/`logic` | 4~8 | 不变 | 不变 | 0 |
 
-代价:每 core 的 ALU / LSU / 寄存器堆各翻一倍(寄存器堆从 8×32 到 16×32 项),
-数据内存接口从 4 通道扩到 8 通道。⚠️ 小图用例的线程数(16/32)已低于 64,
-想继续提速应把它们改成 64 线程(受 `RASTER_PIXELS % RASTER_THREADS == 0` 约束)。
+代价:每 core 的 ALU / LSU / 寄存器堆各翻一倍(寄存器堆 32 k → 64 k FF 总共)。
+
+⚠️ **为什么最终又改回 8 lane**(2026-10-18 决定):
+
+1. **面积**:16 lane 光寄存器堆就 64 k FF(4×16×32×32),4 个 core 加上控制逻辑已经贴到
+   Zynq-7020(53 k LUT / 106 k FF)的上限;8 lane 只占一半。
+2. **除法器才是真卡点**:`DIV`/`REM` 现在是**单拍组合除法器**,一个约 8~10 k LUT,
+   32 lane 就已经放不下,更不用说 64 lane。上 FPGA 前必须先把热路径里的常量除法消掉。
+3. 16 lane 的周期收益(−50%)是真的,但它换的是面积;仿真器的壁钟在 iverilog 下反而变长
+   (每拍开销翻倍),换成 Verilator 后两者才能都体现出来。
 
 ## 11. 与 RTL 的对应关系
 

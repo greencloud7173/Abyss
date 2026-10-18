@@ -133,8 +133,8 @@ make test_logic
 make test CASE=matadd
 ```
 
-RTL 配置为 4 个 core、每个 core 16 线程/块。**默认仿真器是 Verilator**（16x16 约 1.3 秒、
-32x32 约 2.6 秒、128x128 约 21 秒）；找不到 Verilator 时自动回退到 Icarus。
+RTL 配置为 4 个 core、每个 core 8 线程/块。**默认仿真器是 Verilator**（16x16 约 0.8 秒、
+32x32 约 1.8 秒、128x128 约 29 秒）；找不到 Verilator 时自动回退到 Icarus。
 
 ### 仿真器选择
 
@@ -168,15 +168,15 @@ make test matadd \
   VERILATOR=/usr/bin/verilator VERILATOR_ROOT=/usr/share/verilator
 ```
 
-实测（16 lane / 4 core 配置，单位秒）：
+实测（8 lane / 4 core 配置，单位秒）：
 
 | 用例 | icarus | verilator | 加速 |
 | - | - | - | - |
-| `raster128x128` | 108.4 | **20.4** | 5.3× |
-| `icache` | 40.5 | 26.0 | 1.6× |
-| `raster32x32` | 6.1 | 2.6 | 2.3× |
-| `raster16x16` | 6.7 | 1.3 | 5.2× |
-| 标量用例（matadd 等） | 1.5 | 0.8 | 1.9× |
+| `raster128x128` | 90 | **29** | 3.1× |
+| `icache` | 40.5 | 23.5 | 1.7× |
+| `raster32x32` | 6.1 | 1.8 | 3.4× |
+| `raster16x16` | 2.8 | 0.8 | 3.5× |
+| 标量用例（matadd 等） | 1.1 | 0.8 | 1.4× |
 
 ⚠️ 两个仿真器对**有符号除法溢出**的定义不同（`INT_MIN / -1`：Icarus 回绕成
 `0x80000000`，Verilator 给 `0`），这曾在 `div` 用例上暴露出来，现在 `alu.sv`
