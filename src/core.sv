@@ -59,6 +59,11 @@ module core #(
     reg [DATA_MEM_DATA_BITS-1:0] lsu_out[THREADS_PER_BLOCK-1:0];
     wire [DATA_MEM_DATA_BITS-1:0] alu_out[THREADS_PER_BLOCK-1:0];
     wire [PROGRAM_MEM_ADDR_BITS-1:0] pc_result[THREADS_PER_BLOCK-1:0];
+
+    // Is any lane still running a multi-cycle division?  OR-reduced so it costs
+    // a single wide gate instead of a priority chain.
+    wire [THREADS_PER_BLOCK-1:0] alu_busy;
+    wire any_alu_busy = |alu_busy;
     
     // Decoded Instruction Signals
     reg [4:0] decoded_rd_address;
@@ -141,6 +146,7 @@ module core #(
         .decoded_mem_write_enable(decoded_mem_write_enable),
         .decoded_ret(decoded_ret),
         .lsu_state(lsu_state),
+        .alu_busy(any_alu_busy),
         .current_pc(current_pc),
         .next_pc(next_pc),
         .done(done)
@@ -163,7 +169,8 @@ module core #(
                 .decoded_immediate(decoded_immediate),
                 .rs(rs[i]),
                 .rt(rt[i]),
-                .alu_out(alu_out[i])
+                .alu_out(alu_out[i]),
+                .div_busy(alu_busy[i])
             );
 
             // LSU

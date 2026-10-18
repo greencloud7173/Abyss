@@ -32,7 +32,13 @@ module alu #(
 
     input reg [DATA_BITS-1:0] rs,
     input reg [DATA_BITS-1:0] rt,
-    output wire [DATA_BITS-1:0] alu_out
+    output wire [DATA_BITS-1:0] alu_out,
+
+    // High while this lane's iterative divider is still working.  The scheduler
+    // ORs this across all lanes and holds EXECUTE until it drops (see
+    // scheduler.sv), which is what turns a multi-cycle DIV into a stall on
+    // core_state instead of a new core state.
+    output wire div_busy
 );
     localparam ADD = 4'b0000,
         SUB = 4'b0001,
@@ -74,18 +80,12 @@ module alu #(
     // Division by zero returns what RISC-V says instead of `x`
     wire divisor_is_zero = (operand_b == {DATA_BITS{1'b0}});
 
-    // Compute the four division results as self-determined values first.
-    // Classic Verilog pitfall: `cond ? {N{1'b1}} : (rs_signed / operand_b)` makes the
-    // whole conditional expression *unsigned* (one branch is an unsigned literal),
-    // which silently turns `div` into `divu`. Keeping them in named wires avoids it.
-    wire signed [DATA_BITS-1:0] div_signed;
-    wire [DATA_BITS-1:0] div_unsigned;
-    wire signed [DATA_BITS-1:0] rem_signed;
-    wire [DATA_BITS-1:0] rem_unsigned;
-    assign div_signed = rs_signed / operand_b;
-    assign div_unsigned = rs / operand_b_unsigned;
-    assign rem_signed = rs_signed % operand_b;
-    assign rem_unsigned = rs % operand_b_unsigned;
+    // The four division results used to be computed right here with a
+    // combinational `rs / operand_b` / `rs % operand_b`.  Synthesis unrolls that
+    // into a full restoring divider -- roughly a thousand LUTs per instance, and
+    // there is one ALU per lane (32 of them on this configuration), so it does
+    // not fit in any small FPGA.  Division is therefore iterative now; see the
+    // multi-cycle divider below.
 
     // INT_MIN / -1 is the one signed division whose true quotient (+2^31) does not
     // fit in 32 bits.  Verilog leaves the result implementation-defined, and the
@@ -94,6 +94,135 @@ module alu #(
     wire dividend_is_min = (rs == {1'b1, {DATA_BITS-1{1'b0}}});
     wire divisor_is_minus1 = (operand_b == {DATA_BITS{1'b1}});
     wire div_overflow = dividend_is_min && divisor_is_minus1;
+
+    // ------------------------------------------------------------------
+    // Multi-cycle divider
+    // ------------------------------------------------------------------
+    // Two quotient bits per clock, DATA_BITS/2 clocks per operation, using the
+    // classic shift/subtract (restoring) algorithm:
+    //
+    //   rem = 0
+    //   for i = DATA_BITS-1 downto 0:
+    //       rem = (rem << 1) | dividend[i]
+    //       if rem >= divisor: rem -= divisor; quotient[i] = 1
+    //
+    // Signed operands are handled the RISC-V way: divide the magnitudes and fix
+    // up the signs afterwards.  Truncating toward zero is exactly what
+    // `|a| / |b|` followed by a sign fix-up produces, and the remainder takes the
+    // sign of the dividend.
+    //
+    // x/0 and INT_MIN/-1 never reach the iterator -- they are decoded away in a
+    // single cycle by the normal case statement below.
+    localparam DV_IDLE = 2'b00, DV_ITER = 2'b01, DV_FIN = 2'b10;
+    localparam CNT_BITS = $clog2(DATA_BITS + 1);
+
+    wire dv_is_div = (decoded_alu_arithmetic_mux == DIV) ||
+                     (decoded_alu_arithmetic_mux == DIVU);
+    wire dv_is_rem = (decoded_alu_arithmetic_mux == REM) ||
+                     (decoded_alu_arithmetic_mux == REMU);
+    wire dv_signed = (decoded_alu_arithmetic_mux == DIV) ||
+                     (decoded_alu_arithmetic_mux == REM);
+    wire dv_overflow = dv_signed && div_overflow;
+    wire dv_needs_hw = (dv_is_div || dv_is_rem) && !divisor_is_zero && !dv_overflow;
+
+    // Magnitudes.  |INT_MIN| = 2^31 still fits in an unsigned word, so the
+    // negation below is well defined even for the most negative dividend.
+    wire [DATA_BITS-1:0] dv_dividend_mag = (dv_signed && rs[DATA_BITS-1])
+                                           ? (~rs + 1'b1) : rs;
+    wire [DATA_BITS-1:0] dv_divisor_mag = (dv_signed && operand_b[DATA_BITS-1])
+                                          ? (~operand_b_unsigned + 1'b1)
+                                          : operand_b_unsigned;
+
+    // One-cycle pulse at the start of an EXECUTE phase.  Needed because the core
+    // now stays in EXECUTE for several cycles per DIV: without it the divider
+    // would restart on every one of them.
+    reg exec_seen;
+    always @(posedge clk) begin
+        if (reset) begin
+            exec_seen <= 1'b0;
+        end else begin
+            exec_seen <= (core_state == 3'b101);
+        end
+    end
+    wire exec_start = (core_state == 3'b101) && !exec_seen;
+
+    reg [1:0] dv_state;
+    reg [CNT_BITS-1:0] dv_count;
+    reg [DATA_BITS-1:0] dv_divisor_reg;
+    reg [DATA_BITS-1:0] dv_shift_reg;     // dividend, consumed MSB first
+    reg [DATA_BITS-1:0] dv_rem_reg;       // always < divisor, so DATA_BITS is enough
+    reg [DATA_BITS-1:0] dv_quot_reg;
+    reg dv_quot_neg, dv_rem_neg;
+    reg [DATA_BITS-1:0] dv_result;
+    reg dv_done;                          // one-cycle pulse: dv_result is valid
+
+    wire dv_start = exec_start && enable && (dv_state == DV_IDLE) && dv_needs_hw;
+    assign div_busy = (dv_state != DV_IDLE) || dv_start;
+
+    // Two restoring steps per clock, so a 32-bit division costs 16 clocks
+    // instead of 32.  Two chained 33-bit subtractors stay well inside a
+    // 100 MHz budget on 7-series parts; four would not.
+    // (DATA_BITS is expected to be even, which it is for every instantiation.)
+    wire [DATA_BITS:0] dv_divisor_ext = {1'b0, dv_divisor_reg};
+
+    wire [DATA_BITS:0] dv_rem_step1 = {dv_rem_reg, dv_shift_reg[DATA_BITS-1]};
+    wire dv_ge1 = (dv_rem_step1 >= dv_divisor_ext);
+    wire [DATA_BITS:0] dv_rem_part1 = dv_ge1 ? (dv_rem_step1 - dv_divisor_ext)
+                                             : dv_rem_step1;
+
+    wire [DATA_BITS:0] dv_rem_step2 = {dv_rem_part1[DATA_BITS-1:0],
+                                       dv_shift_reg[DATA_BITS-2]};
+    wire dv_ge2 = (dv_rem_step2 >= dv_divisor_ext);
+    wire [DATA_BITS:0] dv_rem_part2 = dv_ge2 ? (dv_rem_step2 - dv_divisor_ext)
+                                             : dv_rem_step2;
+
+    always @(posedge clk) begin
+        if (reset) begin
+            dv_state <= DV_IDLE;
+            dv_count <= 0;
+            dv_divisor_reg <= 0;
+            dv_shift_reg <= 0;
+            dv_rem_reg <= 0;
+            dv_quot_reg <= 0;
+            dv_quot_neg <= 1'b0;
+            dv_rem_neg <= 1'b0;
+            dv_result <= 0;
+            dv_done <= 1'b0;
+        end else if (enable) begin
+            dv_done <= 1'b0;
+            case (dv_state)
+                DV_IDLE: begin
+                    if (dv_start) begin
+                        dv_divisor_reg <= dv_divisor_mag;
+                        dv_shift_reg <= dv_dividend_mag;
+                        dv_quot_neg <= dv_signed &&
+                                       (rs[DATA_BITS-1] != operand_b[DATA_BITS-1]);
+                        dv_rem_neg <= dv_signed && rs[DATA_BITS-1];
+                        dv_rem_reg <= 0;
+                        dv_quot_reg <= 0;
+                        dv_count <= DATA_BITS;
+                        dv_state <= DV_ITER;
+                    end
+                end
+                DV_ITER: begin
+                    dv_rem_reg <= dv_rem_part2[DATA_BITS-1:0];
+                    dv_quot_reg <= {dv_quot_reg[DATA_BITS-3:0], dv_ge1, dv_ge2};
+                    dv_shift_reg <= {dv_shift_reg[DATA_BITS-3:0], 2'b00};
+                    dv_count <= dv_count - 2'd2;
+                    if (dv_count == 2) begin
+                        dv_state <= DV_FIN;
+                    end
+                end
+                default: begin  // DV_FIN
+                    dv_result <= dv_is_rem
+                        ? (dv_rem_neg ? (~dv_rem_reg + 1'b1) : dv_rem_reg)
+                        : (dv_quot_neg ? (~dv_quot_reg + 1'b1) : dv_quot_reg);
+                    dv_done <= 1'b1;
+                    dv_state <= DV_IDLE;
+                end
+            endcase
+        end
+    end
 
     // Comparisons for SLT / SLTU.  `rs_signed < operand_b` is a signed compare
     // (both operands are declared signed), the other one is unsigned.  For SLTIU
@@ -106,8 +235,17 @@ module alu #(
         if (reset) begin 
             alu_out_reg <= {DATA_BITS{1'b0}};
         end else if (enable) begin
-            // Calculate alu_out when core_state = EXECUTE
-            if (core_state == 3'b101) begin 
+            // A completed division writes back through here.  It can never
+            // collide with the case below: dv_done only pulses in DV_FIN, which
+            // is several cycles into EXECUTE, while exec_start only pulses on the
+            // first one.
+            if (dv_done) begin
+                alu_out_reg <= dv_result;
+            end
+
+            // Calculate alu_out on the first cycle of EXECUTE.  Multi-cycle
+            // divisions are excluded -- the divider above owns them.
+            if (exec_start && !dv_needs_hw) begin 
                 // Execute the specified arithmetic instruction
                 case (decoded_alu_arithmetic_mux)
                     ADD: begin 
@@ -120,24 +258,23 @@ module alu #(
                         alu_out_reg <= rs * operand_b;
                     end
                     DIV: begin 
-                        // RISC-V `div`: signed division, truncated toward zero; x/0 = -1;
-                        // INT_MIN/-1 wraps back to INT_MIN
-                        alu_out_reg <= divisor_is_zero ? {DATA_BITS{1'b1}} :
-                            (div_overflow ? rs : div_signed);
+                        // Only the single-cycle special cases land here (every
+                        // other division is done by the iterative divider):
+                        // x/0 = -1, INT_MIN/-1 = INT_MIN
+                        alu_out_reg <= divisor_is_zero ? {DATA_BITS{1'b1}} : rs;
                     end
                     DIVU: begin 
-                        // RISC-V `divu`: unsigned division; x/0 = 2^32-1
-                        alu_out_reg <= divisor_is_zero ? {DATA_BITS{1'b1}} : div_unsigned;
+                        // Only x/0 lands here: 2^32-1
+                        alu_out_reg <= {DATA_BITS{1'b1}};
                     end
                     REM: begin 
-                        // RISC-V `rem`: sign follows the dividend; x%0 = x;
-                        // INT_MIN%-1 = 0 (the overflow case above)
-                        alu_out_reg <= divisor_is_zero ? rs :
-                            (div_overflow ? {DATA_BITS{1'b0}} : rem_signed);
+                        // Only the single-cycle special cases land here:
+                        // x%0 = x, INT_MIN%-1 = 0
+                        alu_out_reg <= divisor_is_zero ? rs : {DATA_BITS{1'b0}};
                     end
                     REMU: begin 
-                        // RISC-V `remu`: unsigned remainder; x%0 = x
-                        alu_out_reg <= divisor_is_zero ? rs : rem_unsigned;
+                        // Only x%0 lands here: x%0 = x
+                        alu_out_reg <= rs;
                     end
                     SLL: begin 
                         // Logical shift left, amount = low 5 bits of the B operand

@@ -111,6 +111,9 @@ gds/                  GDSII 布局结果
 5. **每个 core 带一个指令 cache**（直接映射，128 行 × 1 条指令，可调）。命中时不再访问
    program memory，`FETCH` 只占 1 拍、直接进 `DECODE`；未命中才去 RAM 取一次并把该行装进 cache。
    分支/循环因此不再付重复取指的代价（详见 [`docs/isa.md`](docs/isa.md) 第 6 章）。
+6. **除法是迭代实现的**（`DIV`/`DIVU`/`REM`/`REMU`，每拍 2 位，32 位除法 16 拍）。
+   组合除法在综合时会展开成上千 LUT，乘 32 个 lane 就放不进小 FPGA，所以 ALU 拉
+   `div_busy`、scheduler 在 `EXECUTE` 里等它 —— 状态机编码完全没有变。
 
 ![Thread](docs/images/thread.png)
 

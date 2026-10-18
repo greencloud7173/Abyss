@@ -31,6 +31,7 @@ module scheduler #(
     input reg [2:0] fetcher_state,
     input reg fetch_hit,                    // instruction cache hit for current_pc
     input reg [1:0] lsu_state [THREADS_PER_BLOCK-1:0],
+    input wire alu_busy,                    // any lane's divider still running
 
     // Current & Next PC
     output reg [PROGRAM_MEM_ADDR_BITS-1:0] current_pc,
@@ -110,8 +111,14 @@ module scheduler #(
                     end
                 end
                 EXECUTE: begin
-                    // Execute is synchronous so we move on after one cycle
-                    core_state <= UPDATE;
+                    // Most instructions are done in one cycle.  DIV / DIVU / REM
+                    // / REMU instead run a multi-cycle divider, so the core parks
+                    // here (the downstream units only look at core_state, so
+                    // holding EXECUTE stalls everything for free) until the last
+                    // lane has produced its result.
+                    if (!alu_busy) begin
+                        core_state <= UPDATE;
+                    end
                 end
                 UPDATE: begin 
                     if (decoded_ret) begin 

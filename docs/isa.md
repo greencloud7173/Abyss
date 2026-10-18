@@ -272,7 +272,8 @@ RISC-V 保留的 custom 段分配(便于将来扩展,均已避开官方指令编
 
 | 指令 | 读寄存器 | 计算 / 访存 | 写回 |
 | - | - | - | - |
-| `ADD` `SUB` `MUL` `DIV` `DIVU` `REM` `REMU` | `REQUEST` 采样 rs、rt | `EXECUTE` ALU 运算 | `UPDATE` 写 rd |
+| `ADD` `SUB` `MUL` | `REQUEST` 采样 rs、rt | `EXECUTE` ALU 运算(1 拍) | `UPDATE` 写 rd |
+| `DIV` `DIVU` `REM` `REMU` | `REQUEST` 采样 rs、rt | `EXECUTE` 迭代除法器(**17 拍**,见 6.3) | `UPDATE` 写 rd |
 | `SLL` `SRL` `SRA` `SLLI` `SRLI` `SRAI` | `REQUEST` 采样 rs1、rs2 | `EXECUTE` 桶形移位器(1 拍) | `UPDATE` 写 rd |
 | `LDR` `LB` `LH` `LBU` `LHU` | `REQUEST` 采样 rs1(基址) | 字节地址→字地址+lane;`REQUEST` 发起读,`WAIT` 等应答 | `UPDATE` 写 rd(选择 lane 后扩展) |
 | `STR` `SB` `SH` | `REQUEST` 采样 rs1(基址)、rs2(数据) | 同上;写数据移位到 lane,并带 4 位字节掩码 | — |
@@ -327,7 +328,7 @@ RISC-V 保留的 custom 段分配(便于将来扩展,均已避开官方指令编
 | `010` | DECODE | decoder 锁存字段、产生控制信号 |
 | `011` | REQUEST | 寄存器堆采样 `rs`/`rt`;`LDR`/`STR` 在此发起内存请求 |
 | `100` | WAIT | 若有 LSU 处于 REQUESTING/WAITING 就继续等待(内存延迟);**非访存指令跳过本态** |
-| `101` | EXECUTE | ALU 运算 / 比较;PC 单元算分支、跳转与 `pc_result` |
+| `101` | EXECUTE | ALU 运算 / 比较;PC 单元算分支、跳转与 `pc_result`。除法指令会**在本态停留多拍**(见 6.3) |
 | `110` | UPDATE | 写回 rd(ALU / LSU / PC 单元三种来源)、更新 PC |
 | `111` | DONE | 本 block 结束(遇到 `RET`) |
 
@@ -401,6 +402,39 @@ RISC-V 保留的 custom 段分配(便于将来扩展,均已避开官方指令编
 | 剩余 `WAIT` | 每条指令 1 拍 | 只剩访存指令在等 LSU |
 
 影响面:访存比例越高的内核收益越小(标量访存型内核约 −7%,光栅这类计算型约 −14%)。
+
+### 6.3 多周期除法器(2026-10,FPGA 可综合)
+
+**问题**:`DIV` / `DIVU` / `REM` / `REMU` 原本是组合逻辑(`rs / operand_b`)。
+综合会把 32 位除法展开成完整的 restoring divider —— 单实例约上千 LUT,而设计里有
+`THREADS_PER_BLOCK × NUM_CORES = 32` 个 ALU,合计 6 万+ LUT,**小 FPGA 装不下**
+(XC7Z020 只有 53.2k LUT)。
+
+**做法**:改成迭代除法器,每拍产生 **2 位商**,32 位除法共 16 拍(加上启动/写回共
+17 拍),面积降到每 lane 几百 LUT。
+
+- **不加新状态**:`core_state` 仍是 8 态 3 位编码。除法指令期间 ALU 拉高
+  `div_busy`,scheduler 在 `EXECUTE` 里等 `alu_busy` 拉低才进 `UPDATE`。
+  因为其他模块只看 `core_state`,“停在 `EXECUTE`”天然就把整条流水停住了,
+  不需要动 `fetcher` / `decoder` / `lsu` / `registers` / `pc` 里的状态比较。
+- **单拍特例**:`x/0` 与 `INT_MIN / -1` 不进迭代器,仍在当拍由 case 分支给出
+  RISC-V 语义(`x/0 = -1`、`INT_MIN/-1 = INT_MIN`、`INT_MIN%-1 = 0`)。
+- **符号**:按绝对值做除法,结束再修符号(商取两操作数异号,余数取被除数符号),
+  正好等价于 RISC-V 的“向零截断”。
+- **启动边沿**:ALU 内部用 `exec_start`(单拍脉冲)启动除法,否则 `EXECUTE` 停留
+  多拍会把除法重启 16 次。
+
+**代价**(Verilator,8 lane,4 core):
+
+| 用例 | 组合除法 | 迭代除法 | 变化 |
+| - | - | - | - |
+| `div` | 1,070 拍 | 1,142 拍 | +6.7% |
+| `matmul` | 1,233 拍 | 1,251 拍 | +1.5% |
+| raster128x128 | 128,794 拍 | 147,129 拍 | +14.2% |
+| raster512x512 | 2,174,368 拍 | 2,469,218 拍 | +13.6% |
+
+光栅内核每像素有两条 `DIV`(`p / 512` 与 `3*m*255 / area`),所以对除法延迟最敏感。
+后续可在 LLVM 侧把**除常数的 `sdiv` 折成移位/乘幻数**,把这部分代价拿回来。
 
 ## 7. 编码速查
 
@@ -839,10 +873,23 @@ $$\text{墙钟} \approx \frac{\text{线程数} / (\text{core 数} \times \text{l
 
 1. **面积**:16 lane 光寄存器堆就 64 k FF(4×16×32×32),4 个 core 加上控制逻辑已经贴到
    Zynq-7020(53 k LUT / 106 k FF)的上限;8 lane 只占一半。
-2. **除法器才是真卡点**:`DIV`/`REM` 现在是**单拍组合除法器**,一个约 8~10 k LUT,
-   32 lane 就已经放不下,更不用说 64 lane。上 FPGA 前必须先把热路径里的常量除法消掉。
+2. **除法器曾是最大卡点**:`DIV`/`REM` 原先是**单拍组合除法器**,一个约 8~10 k LUT,
+   32 lane 就已经放不下,更不用说 64 lane。现已改为每拍 2 位的迭代除法器(见 6.3),
+   面积降到每 lane 几百 LUT。
 3. 16 lane 的周期收益(−50%)是真的,但它换的是面积;仿真器的壁钟在 iverilog 下反而变长
    (每拍开销翻倍),换成 Verilator 后两者才能都体现出来。
+
+### 多周期除法器:为 FPGA 可综合性改造(2026-10-18)
+
+- 把 `src/alu.sv` 里 4 个组合 `/` `%`(`div_signed` / `div_unsigned` / `rem_signed`
+  / `rem_unsigned`)换成**每拍 2 位**的迭代 restoring 除法器,32 位除法 16 拍完成。
+- 新增 `alu.div_busy` 输出,`core.sv` 做 OR-reduce 后送 `scheduler`,scheduler 在
+  `EXECUTE` 等它拉低才进 `UPDATE`。**`core_state` 编码保持 8 态 3 位不变**,
+  `fetcher` / `decoder` / `lsu` / `registers` / `pc` 一行没动。
+- `x/0`、`INT_MIN / -1`、`INT_MIN % -1` 仍在当拍由 case 分支给出 RISC-V 语义。
+- **ISA 语义零变化**:`docs`、`.td`、LLVM 后端、clang 端口、汇编器全部不需要改。
+- 代价:含除法的内核变慢(光栅 −13.6%,`div` 用例 −6.7%,`matmul` −1.5%),
+  其余用例拍数完全不变。
 
 ## 11. 与 RTL 的对应关系
 
@@ -851,7 +898,7 @@ $$\text{墙钟} \approx \frac{\text{线程数} / (\text{core 数} \times \text{l
 | opcode / funct3 / funct7 分派、字段切片、控制信号 | `src/decoder.sv` |
 | 寄存器堆(x0 恒 0、R1–R28 可写、只读 29/30/31) | `src/registers.sv` |
 | 分支比较、PC 相对/寄存器间接跳转、`pc_result`(JAL/JALR/AUIPC 写回值)、PC 计算 | `src/pc.sv` |
-| 算术运算、立即数选择(ADDI / LUI)、移位 | `src/alu.sv` |
+| 算术运算、立即数选择(ADDI / LUI)、移位、迭代除法器 | `src/alu.sv` |
 | `LDR` / `STR` / 窄访存的异步请求、字节地址→字地址+lane、扩展/掩码 | `src/lsu.sv` + `src/controller.sv` |
 | 8 态控制流 | `src/scheduler.sv` |
 | block 分配与 `done` | `src/dispatch.sv` |
