@@ -75,6 +75,15 @@ test/
     build/
       logic.o
       logic.bin
+  icache/
+    __init__.py
+    test_icache.py        # 同时断言结果、命中率与周期数
+    src/
+      icache.c            # 200 次循环，取指几乎全命中
+      start.s
+    build/
+      icache.o
+      icache.bin
   raster16x16/             # 以及 raster32x32 ... raster1024x1024
     __init__.py
     test_rasterNxN.py
@@ -104,6 +113,7 @@ make test mem
 make test div
 make test slt
 make test logic
+make test icache
 
 make test raster16x16
 make test raster32x32

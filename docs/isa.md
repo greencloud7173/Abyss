@@ -341,6 +341,43 @@ RISC-V 保留的 custom 段分配(便于将来扩展,均已避开官方指令编
 6. 无分支发散:`current_pc <= next_pc[THREADS_PER_BLOCK-1]`,即取最后一个线程的下一 PC;要求各线程每步收敛到同一 PC。
 7. 每个 block 的 PC 从 0 开始;`RET` 后 core 被 dispatcher 复位并接收下一个 block。
 
+### 6.1 指令 cache(2026-10)
+
+`src/fetcher.sv` 里每个 core 带一个**直接映射指令 cache**:
+
+| 项 | 取值 |
+| - | - |
+| 结构 | 直接映射,行 = 1 条 32 位指令,`CACHE_LINES` 行(`parameter`,默认 128,必须是 2 的幂) |
+| 索引 / 标记 | `index = pc[INDEX_BITS-1:0]`,`tag = pc[ADDR_BITS-1:INDEX_BITS]` |
+| 命中 | **完全不访问 program memory**;`instruction` 直接从 cache 取,`FETCH` 只占 1 拍 |
+| 未命中 | 发一次 `program_mem_read`,收到的字写回该行(数据 + tag + valid) |
+| 冲刷 | `flush` 拉高时整块失效;`core.sv` 在 `core_state == IDLE` 时拉高,即**每次新一轮执行前** |
+| 计数 | `cache_hits` / `cache_misses`(32 位,可从 cocotb 层次化读取) |
+
+命中路径为什么能省两拍:命中时 fetcher 在 `FETCH` 那一拍就把 `instruction` 和
+`fetcher_state = FETCHED` 同时置好,并把 `fetch_hit` 送给 scheduler;`FETCH` 分支写成
+`fetcher_state == FETCHED || fetch_hit`,于是下一拍直接进 `DECODE`,不需要等内存往返。
+未命中时仍走 `IDLE → FETCHING → FETCHED` 的老路。
+
+⚠️ 冲刷为什么挂在 IDLE 上:一次 kernel launch 内 program memory 不会变,但换 kernel 时会变,
+而 core 在两块之间一定经过 IDLE。把 flush 绑在这里等价于"流水线冲刷":没有一条取过的指令
+能活过重启点。想改成"分支时冲刷"(即 control hazard 式的 flush)也可以,但循环每跳一次就全失效,
+反而比不做 cache 更慢。
+
+实测(同一条内核,仅 `fetch_hit` 置 0 做对照):
+
+| 用例 | 无 cache | 有 cache | 变化 |
+| - | - | - | - |
+| `raster32x32`(内层循环 92 条指令) | 1.90e9 ns | 5.75e8 ns | **−70%** |
+| `raster16x16` | 4.29e8 ns | 2.66e8 ns | −38% |
+| `icache`(200 次循环) | 5.3 万拍 | 3.3 万拍 | −38%(命中率 98.3%) |
+| `matmul`(循环只有 2 次) | 4.30e7 ns | 4.00e7 ns | −7% |
+| `logic`(直线代码) | 2.98e7 ns | 2.98e7 ns | 0 |
+
+面积代价:每行 `32 + TAG + 1` 位,128 行约 7.4 kbit/core。若内层循环比 `CACHE_LINES` 长,
+直接映射会冲突抖动(raster 的 92 条指令循环在 `CACHE_LINES = 32` 时几乎全部未命中),
+此时把 `CACHE_LINES` 调大或改成组相联即可。
+
 ## 7. 编码速查
 
 ```

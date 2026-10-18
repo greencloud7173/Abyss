@@ -45,6 +45,11 @@ module core #(
     reg [2:0] fetcher_state;
     reg [PROGRAM_MEM_DATA_BITS-1:0] instruction;
 
+    // Instruction cache: a hit is served immediately, and the cache is flushed
+    // whenever the core is idle (i.e. at the start of a new kernel launch)
+    wire fetch_hit;
+    wire icache_flush = (core_state == 3'b000);
+
     // Intermediate Signals
     reg [PROGRAM_MEM_ADDR_BITS-1:0] current_pc;
     wire [PROGRAM_MEM_ADDR_BITS-1:0] next_pc[THREADS_PER_BLOCK-1:0];
@@ -83,6 +88,7 @@ module core #(
     ) fetcher_instance (
         .clk(clk),
         .reset(reset),
+        .flush(icache_flush),
         .core_state(core_state),
         .current_pc(current_pc),
         .mem_read_valid(program_mem_read_valid),
@@ -90,7 +96,8 @@ module core #(
         .mem_read_ready(program_mem_read_ready),
         .mem_read_data(program_mem_read_data),
         .fetcher_state(fetcher_state),
-        .instruction(instruction) 
+        .instruction(instruction),
+        .fetch_hit(fetch_hit)
     );
 
     // Decoder
@@ -128,6 +135,7 @@ module core #(
         .start(start),
         .thread_count(thread_count),
         .fetcher_state(fetcher_state),
+        .fetch_hit(fetch_hit),
         .core_state(core_state),
         .decoded_mem_read_enable(decoded_mem_read_enable),
         .decoded_mem_write_enable(decoded_mem_write_enable),

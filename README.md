@@ -94,9 +94,9 @@ gds/                  GDSII 布局结果
 
 ![GPU](docs/images/gpu.png)
 
-一个 GPU 由 **2 个 core** 组成，每个 core 负责一个 block、**4 个线程**（`THREADS_PER_BLOCK`）。
-同一 core 内的 4 个线程**共享一个 fetcher 和一个 decoder**，但各自拥有独立的 ALU、LSU、PC 和寄存器堆 ——
-这就是 SIMD 在硬件上的样子：一条指令，四个数据通路同时执行。
+一个 GPU 由 **4 个 core** 组成，每个 core 负责一个 block、最多 **8 个线程**（`THREADS_PER_BLOCK`）。
+同一 core 内的线程**共享一个 fetcher 和一个 decoder**，但各自拥有独立的 ALU、LSU、PC 和寄存器堆 ——
+这就是 SIMD 在硬件上的样子：一条指令，多个数据通路同时执行。
 
 ![Core](docs/images/core.png)
 
@@ -108,6 +108,9 @@ gds/                  GDSII 布局结果
 3. **数据内存按字节寻址**。`LSU` 负责 `byte_address >>> 2` 得到字地址、`byte_address[1:0]` 得到 lane，
    窄读时做符号/零扩展，窄写时把数据移进 lane 并生成字节掩码 —— 这样 C 里的 `char`/`short` 和指针演算才成立。
 4. **`x0` 恒为 0**，`R29/R30/R31` 是只读的 `%blockIdx` / `%blockDim` / `%threadIdx`。
+5. **每个 core 带一个指令 cache**（直接映射，128 行 × 1 条指令，可调）。命中时不再访问
+   program memory，`FETCH` 只占 1 拍、直接进 `DECODE`；未命中才去 RAM 取一次并把该行装进 cache。
+   分支/循环因此不再付重复取指的代价（详见 [`docs/isa.md`](docs/isa.md) 第 6 章）。
 
 ![Thread](docs/images/thread.png)
 

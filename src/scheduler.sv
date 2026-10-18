@@ -29,6 +29,7 @@ module scheduler #(
 
     // Memory Access State
     input reg [2:0] fetcher_state,
+    input reg fetch_hit,                    // instruction cache hit for current_pc
     input reg [1:0] lsu_state [THREADS_PER_BLOCK-1:0],
 
     // Current & Next PC
@@ -63,8 +64,10 @@ module scheduler #(
                     end
                 end
                 FETCH: begin 
-                    // Move on once fetcher_state = FETCHED
-                    if (fetcher_state == 3'b010) begin 
+                    // Move on once fetcher_state = FETCHED. On an instruction-cache hit
+                    // the word is already available, so DECODE starts one cycle early
+                    // (no program-memory round trip at all).
+                    if (fetcher_state == 3'b010 || fetch_hit) begin 
                         core_state <= DECODE;
                     end
                 end
