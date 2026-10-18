@@ -28,6 +28,13 @@ def format_instruction(instruction: str) -> str:
     #   I-type: imm[11:0][31:20]           | rs1[19:15] | funct3[14:12] | rd[11:7] | opcode[6:0]
     #   U-type: imm[31:12]                 | rd[11:7] | opcode[6:0]
     #   J-type: imm[20|10:1|11|19:12]     | rd[11:7] | opcode[6:0]
+    #
+    # `0x00000000` is the fetcher's reset value: it is only observable before the
+    # first instruction comes back (IDLE / early FETCH) and between blocks. It is
+    # *not* the NOP encoding -- NOP is `ADDI x0, x0, #0` = `0x00000013`, decoded below.
+    if instruction.strip("0") == "":
+        return "-"
+
     opcode = instruction[25:32]
     funct7 = instruction[0:7]
     rs2 = instruction[7:12]
