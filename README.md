@@ -1,6 +1,13 @@
+<div align="center">
+  <img src="docs/images/logo.png" alt="Abyss logo" width="220">
+</div>
+
 # Abyss
 
 **一个从 RTL 一直做到编译器后端的 SIMD GPU。**
+
+> 顶部这张 logo 不是画出来的 —— 它是 **`test/raster512x512` 用例里 Abyss GPU 自己渲染出来的帧缓冲**，
+> 一字未改（`docs/images/logo.png`）。硬件、ISA、编译器和图形结果在这里闭环。
 
 起点是 [tiny-gpu](https://github.com/AdamMajmudar/tiny-gpu) 那个"用不到 15 个文件讲清 GPU 硬件"的教学项目。
 本项目把它的 ISA 换成了与 RISC-V **逐位兼容**的 **Abyss ISA**，并补齐了原生 LLVM/Clang 后端、
@@ -72,7 +79,7 @@ src/                  RTL（SystemVerilog）
   controller.sv       内存请求仲裁
 
 docs/isa.md           Abyss ISA 手册（唯一副本）
-docs/images/          架构图与 trace 截图
+docs/images/          架构图、trace 截图，以及 logo.png（由 raster512x512 用例渲染）
 tools/
   abyss.h             内核侧接口：abyss_mem()、blockIdx/threadIdx、矩阵类型与运算宏
   run_abyss.py        已过时的 Python ISA 模拟器（禁止用于验证）
@@ -235,6 +242,18 @@ void kernel(void) {
 | `div` | `DIV`/`DIVU`/`REM`/`REMU` + 四种除零情况 |
 | `slt` | `SLT`/`SLTU`/`SLTI`/`SLTIU`，含负立即数与无符号比较 |
 | `logic` | `AND`/`OR`/`XOR` 与立即数版、`~a`、位域提取 |
+| `icache` | 指令 cache 的命中 / 未命中计数与冲刷行为 |
+| `raster16x16` … `raster1024x1024` | C 编写的无分支光栅化内核（边函数 + 梯度着色），输出 PNG 并与 Python 参考模型逐像素比对 |
+
+光栅化用例是这个项目的"图形验收"：kernel 在最多 128 个线程上把三角形画进帧缓冲，
+跑完把结果写成 `test/<case>/build/<case>.png` + `.pixels.bin`。
+**README 顶部那张 logo 就是这条流水线的产物**，直接来自 `raster512x512`，
+没有经过任何后处理：
+
+```bash
+make test raster512x512
+cp test/raster512x512/build/raster512x512.png docs/images/logo.png
+```
 
 全部用例通过（cocotb 2.1，Icarus Verilog 13 与 Verilator 5.046 两套后端结果一致），sv2v 与 iverilog 零告警。
 
