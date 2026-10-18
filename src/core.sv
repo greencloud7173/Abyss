@@ -126,6 +126,7 @@ module core #(
         .clk(clk),
         .reset(reset),
         .start(start),
+        .thread_count(thread_count),
         .fetcher_state(fetcher_state),
         .core_state(core_state),
         .decoded_mem_read_enable(decoded_mem_read_enable),

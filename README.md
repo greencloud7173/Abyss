@@ -9,10 +9,10 @@
 
 | 层 | 内容 |
 | - | - |
-| RTL | SystemVerilog，2 个 core × 4 线程，每线程独立的 ALU / LSU / PC / 寄存器堆 |
+| RTL | SystemVerilog，4 个 core × 8 线程，每线程独立的 ALU / LSU / PC / 寄存器堆 |
 | ISA | 43 条指令，RV32I + M 兼容（仅 `RET` 为自定义），32 位定长编码 |
 | 编译器 | `clang --target=abyss`（LLVM 22 后端 + Clang target），`ld.lld` 链接 |
-| 验证 | cocotb + iverilog，7 个 C 内核用例，逐拍执行 trace |
+| 验证 | cocotb + iverilog，整数与多分辨率光栅化 C 内核用例，逐拍执行 trace |
 
 
 ---
@@ -75,7 +75,9 @@ docs/isa.md           Abyss ISA 手册（唯一副本）
 docs/images/          架构图与 trace 截图
 tools/
   abyss.h             内核侧接口：abyss_mem()、blockIdx/threadIdx、矩阵类型与运算宏
-  run_abyss.py        独立的 ISA 功能模拟器（不开 RTL 时快速自检）
+  run_abyss.py        已过时的 Python ISA 模拟器（禁止用于验证）
+  render_raster.py    已过时的 Python 渲染器（禁止用于验证）
+  pixels_to_image.py  RTL 帧缓冲像素转 PNG/PPM
   examples/           示例 C 内核
   README.md           C 工具链与测试的详细说明
 test/

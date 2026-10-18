@@ -25,6 +25,7 @@ KERNEL_O := $(BUILD)/$(CASE).o
 START_O := $(BUILD)/start.o
 ELF := $(BUILD)/$(CASE).elf
 BIN := $(BUILD)/$(CASE).bin
+HEADERS := $(wildcard $(ROOT)/test/helpers/*.h) $(wildcard $(ROOT)/tools/*.h)
 RTL_SIM := $(ROOT)/build/sim.vvp
 
 COCOTB_VPI := $(shell cocotb-config --lib-entry VPI icarus)
@@ -32,16 +33,17 @@ export LIBPYTHON_LOC := $(shell cocotb-config --libpython)
 export PYGPI_PYTHON_BIN := $(shell cocotb-config --python-bin)
 export GPI_USERS := $(LIBPYTHON_LOC);$(shell cocotb-config --pygpi-entry-point)
 
-.PHONY: all test clean
+.PHONY: all test compile clean
 
 all: test
 
 $(BUILD):
 	mkdir -p $@
 
-$(KERNEL_O): $(KERNEL_C) | $(BUILD)
+$(KERNEL_O): $(KERNEL_C) $(HEADERS) | $(BUILD)
 	$(ABYSS_CLANG) --target=abyss -O2 -fno-pic -fno-delete-null-pointer-checks \
--nostdlib -I $(ROOT)/tools -c $< -o $@
+		-fno-vectorize -fno-slp-vectorize \
+		-nostdlib -I $(ROOT)/tools -c $< -o $@
 
 $(START_O): $(START_S) | $(BUILD)
 	$(LLVM_MC) -arch=abyss -filetype=obj $< -o $@
@@ -51,6 +53,8 @@ $(ELF): $(START_O) $(KERNEL_O)
 
 $(BIN): $(ELF)
 	$(LLVM_OBJCOPY) -O binary --only-section=.text $< $@
+
+compile: $(BIN)
 
 test: $(BIN)
 	$(MAKE) -C $(ROOT) sim

@@ -14,8 +14,10 @@ module gpu #(
     parameter PROGRAM_MEM_ADDR_BITS = 32,     // Number of bits in program memory address (256 rows)
     parameter PROGRAM_MEM_DATA_BITS = 32,    // Number of bits in program memory value (16 bit instruction)
     parameter PROGRAM_MEM_NUM_CHANNELS = 1,  // Number of concurrent channels for sending requests to program memory
-    parameter NUM_CORES = 2,                 // Number of cores to include in this GPU
-    parameter THREADS_PER_BLOCK = 4          // Number of threads to handle per block (determines the compute resources of each core)
+    // 4 cores x 8 threads was the fastest Icarus configuration measured.
+    // 8 cores x 8 threads raises the per-cycle simulation cost and runs slower.
+    parameter NUM_CORES = 4,                 // Number of cores to include in this GPU
+    parameter THREADS_PER_BLOCK = 8          // Number of threads to handle per block (determines the compute resources of each core)
 ) (
     input wire clk,
     input wire reset,

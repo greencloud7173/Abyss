@@ -15,11 +15,12 @@ import os
 import struct
 import subprocess
 import tempfile
+from collections import Counter
 from pathlib import Path
 
 from cocotb.triggers import ReadOnly, RisingEdge
 
-from .format import format_cycle
+from .format import format_cycle, format_instruction
 from .logger import logger
 from .memory import Memory
 from .setup import setup
@@ -111,6 +112,60 @@ def load_program(name: str, case: str | None = None) -> list[int]:
     return list(struct.unpack(f"<{len(raw) // 4}I", raw))
 
 
+def _to_int(value) -> int:
+    value = getattr(value, "value", value)
+    if isinstance(value, str):
+        return int(value, 2)
+    return int(value)
+
+
+def _new_profile() -> dict:
+    return {
+        "core_state": Counter(),
+        "issued_instr": Counter(),
+        "lsu_wait_threads": 0,
+    }
+
+
+def _sample_profile(dut, profile: dict) -> None:
+    """Sample one cycle of core and LSU state."""
+    for core in dut.cores:
+        state = _to_int(core.core_instance.core_state)
+        profile["core_state"][state] += 1
+
+        if state == 6:  # UPDATE: one multi-threaded instruction retired
+            inst = format_instruction(str(core.core_instance.instruction.value))
+            mnemonic = inst.split()[0] if inst not in ("-", "") else "NOP"
+            profile["issued_instr"][mnemonic] += _to_int(
+                core.core_instance.thread_count)
+
+        if state == 4:  # WAIT: count threads blocked in LSU
+            profile["lsu_wait_threads"] += sum(
+                1 for thread in core.core_instance.threads
+                if _to_int(thread.lsu_instance.lsu_state) in (1, 2)
+            )
+
+
+def _profile_report(profile: dict, cycles: int) -> None:
+    state_names = {
+        0: "IDLE", 1: "FETCH", 2: "DECODE", 3: "REQUEST",
+        4: "WAIT", 5: "EXECUTE", 6: "UPDATE", 7: "DONE",
+    }
+    total_core = sum(profile["core_state"].values()) or 1
+    lines = [f"PROFILE cycles={cycles} core_cycles={total_core}"]
+    lines.append("core states:")
+    for state, count in profile["core_state"].most_common():
+        lines.append(f"  {state_names[state]:8s} {count:10d} "
+                     f"{100.0 * count / total_core:6.2f}%")
+    lines.append("instructions (issued across active threads):")
+    for op, count in profile["issued_instr"].most_common(16):
+        lines.append(f"  {op:8s} {count:10d}")
+    lines.append(f"LSU-blocked thread-cycles: {profile['lsu_wait_threads']}")
+    text = "\n".join(lines)
+    logger.info(text)
+    print(text)
+
+
 async def run_case(
     dut,
     binary: str,
@@ -147,12 +202,15 @@ async def run_case(
     if display:
         data_memory.display(display)
 
+    profile = _new_profile() if os.environ.get("ABYSS_PROFILE") == "1" else None
     cycles = 0
     while dut.done.value != 1:
         data_memory.run()
         program_memory.run()
 
         await ReadOnly()
+        if profile is not None:
+            _sample_profile(dut, profile)
         if trace:
             format_cycle(dut, cycles, thread_id=thread_id)
 
@@ -160,6 +218,8 @@ async def run_case(
         cycles += 1
 
     logger.info(f"{binary}: completed in {cycles} cycles")
+    if profile is not None:
+        _profile_report(profile, cycles)
     if display:
         data_memory.display(display)
 

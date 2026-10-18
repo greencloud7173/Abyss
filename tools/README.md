@@ -5,7 +5,8 @@
 
 ```
 test/<case>/src/<case>.c
-  │  clang --target=abyss -O2 -fno-delete-null-pointer-checks -c
+  │  clang --target=abyss -O2 -fno-delete-null-pointer-checks \
+  │       -fno-vectorize -fno-slp-vectorize -c
   ▼
 build/<case>.o
   │  ld.lld --image-base=0 -Ttext=0 -e _start  +  start.o
@@ -33,6 +34,10 @@ make test mem
 make test div
 make test slt
 make test logic
+make test raster16x16
+make test raster32x32
+make test raster64x64
+make test raster128x128
 ```
 
 等价写法：
@@ -71,7 +76,9 @@ make -C test/matadd ABYSS_CLANG=/path/to/clang LLVM_MC=/path/to/llvm-mc
 | 文件 | 作用 |
 | --- | --- |
 | `abyss.h` | `blockIdx/blockDim/threadIdx`、`abyss_mem()` 指针转换、`ABYSS_MATRIX`/`ABYSS_MAT_*` 类型与运算宏 |
-| `run_abyss.py` | 独立的 Abyss 功能模拟器，用于不跑 RTL 时快速检查 |
+| `run_abyss.py` | **已过时**：Python 功能模拟器，禁止用于验证 |
+| `render_raster.py` | **已过时**：基于 Python CPU 模型渲染，禁止用于验证 |
+| `pixels_to_image.py` | RTL 帧缓冲像素转 PNG/PPM，可作为库或命令行工具 |
 | `examples/` | 示例 C 内核 |
 | `start_*.s` | 示例启动 stub |
 
@@ -120,10 +127,100 @@ vector/matrix 类型的 lowering，所以先用普通 C struct + `_Static_assert
 - 数据内存按字节寻址；直接使用普通 C 指针访问，矩阵类型/运算由 `_Static_assert` 做编译期检查。
 - 不支持浮点、64 位、全局变量、PIC、libc、可变参数；函数/调用参数最多 8 个。
 - 每个线程由后端按 `blockIdx * blockDim + threadIdx` 分配独立栈帧。
+- 后端对每个基本块做线性扫描寄存器分配，块内值尽量留在寄存器；跨块值和 PHI
+  保持栈槽，调用前会溢出活跃寄存器。
 
-## 功能模拟器
+光栅化用例位于 `test/raster16x16`、`raster32x32`、`raster64x64`、
+`raster128x128`、`raster256x256`、`raster512x512`、`raster1024x1024`。所有
+分辨率共用 `test/helpers/raster_kernel.h`：
+
+- 背景：黑色 `0x000000`
+- 三角形内部：根据三条边函数的权重，从边缘蓝色 `0x0000FF` 渐变到中心绿色 `0x00FF00`
+- 颜色格式：`0x00RRGGBB`
+- 帧缓冲：字节地址 0 开始，每个像素一个 32 位字
+- 内核不使用条件分支或 `select`，每个线程固定写满自己的像素；这样可避开 GPU
+  对分歧线程的串行化路径
+
+运行 RTL 测试：
 
 ```bash
-make -C test/matmul
-python3 tools/run_abyss.py test/matmul/build/matmul.elf --test matmul
+make test raster16x16
+make test raster64x64
 ```
+
+### 调整三角形顶点
+
+顶点在 `test/helpers/raster_kernel.h` 中通过宏定义：
+
+```c
+RASTER_AX / RASTER_AY   // 顶点 A
+RASTER_BX / RASTER_BY   // 顶点 B
+RASTER_CX / RASTER_CY   // 顶点 C
+```
+
+默认值按分辨率缩放，是一个绕质心逆时针旋转约 210°（之前约 120° 再
+逆时针旋转 90°）的 **钝角不等腰三角形**：
+
+- `A = (width * 789 / 1000, height * 364 / 1000)`
+- `B = (width * 139 / 1000, height * 739 / 1000)`
+- `C = (width * 447 / 1000, height * 273 / 1000)`
+
+C 点的角为钝角，三条边长互不相等。只改某个用例时，在该用例的 C 文件里、
+`#include` 之前覆盖：
+
+```c
+#define RASTER_WIDTH 16
+#define RASTER_HEIGHT 16
+#define RASTER_THREADS 16
+
+#define RASTER_AX 2
+#define RASTER_AY 2
+#define RASTER_BX 13
+#define RASTER_BY 4
+#define RASTER_CX 5
+#define RASTER_CY 13
+
+#include "../../helpers/raster_kernel.h"
+```
+
+坐标原点是帧缓冲左上角，x 向右、y 向下；顶点可以超出帧缓冲，最终会自然裁剪。
+边的颜色仍由三条边函数的最小权重决定：边上蓝色，中心绿色。内部/外部判断、
+`D=area` 和绕序方向都会由 `RASTER_CROSS`、`RASTER_ORIENT`、`RASTER_AREA`
+自动处理；绕序反过来也可以。顶点退化（面积为 0）会在编译期报错。
+
+测试的期望像素模型会读取同名宏，因此只需修改 C 顶点，不需要再改
+`test/helpers/raster.py` 里的公式。
+
+测试结束后会生成 `test/rasterNxN/build/rasterNxN.png`，同时导出
+`test/rasterNxN/build/rasterNxN.pixels.bin`（原始 32 位像素字）。
+
+RTL 配置为 **4 个 CU，每个 CU 8 线程/块**（`src/gpu.sv` 中的
+`NUM_CORES=4`、`THREADS_PER_BLOCK=8`）。仿真耗时随像素数增长，实测
+`16x16` 约 5 秒、`32x32` 约 23 秒、`64x64` 约 1.5 分钟、
+`128x128` 约 5 分钟；
+`256x256` 及以上需要数十分钟到数小时，但**必须继续使用 RTL**。
+
+Python 功能模拟已过时，不再作为验证或生成参考图的手段。测试只接受
+cocotb + Icarus RTL 的结果。
+
+也可以把已有的像素数据交给独立工具：
+
+```bash
+python3 tools/pixels_to_image.py test/raster16x16/build/raster16x16.pixels.bin \
+  --width 16 --height 16 -o /tmp/raster16x16.png
+```
+
+`pixels_to_image.py` 工具支持：
+
+- 输入：原始 little-endian `.bin`，或每行一个 `0xRRGGBB` 的文本文件
+- 输出：PNG（默认）或 `.ppm`
+- 作为库使用：`from tools.pixels_to_image import memory_pixels, save_png`
+
+## 已过时的 Python 功能模拟
+
+`run_abyss.py` 和 `render_raster.py` 保留仅用于历史对比，**已过时，禁止用于
+测试验证或生成验收图片**。所有测试结果必须来自 RTL：
+
+```bash
+make test matmul
+make test raster16x16

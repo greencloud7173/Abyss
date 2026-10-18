@@ -20,6 +20,7 @@ module scheduler #(
     input wire clk,
     input wire reset,
     input wire start,
+    input wire [$clog2(THREADS_PER_BLOCK):0] thread_count,
     
     // Control Signals
     input reg decoded_mem_read_enable,
@@ -101,8 +102,10 @@ module scheduler #(
                         done <= 1;
                         core_state <= DONE;
                     end else begin 
-                        // TODO: Branch divergence. For now assume all next_pc converge
-                        current_pc <= next_pc[THREADS_PER_BLOCK-1];
+                        // TODO: Branch divergence. For now assume all active
+                        // threads converge; ignore inactive lanes in a
+                        // partially filled final block.
+                        current_pc <= next_pc[thread_count - 1];
 
                         // Update is synchronous so we move on after one cycle
                         core_state <= FETCH;
