@@ -3,7 +3,8 @@
 
 Used to sanity-check programs produced by abysscc without running Verilator.
 It implements the Abyss instructions used by the tests, including the
-SLL/SRL/SRA and SLLI/SRLI/SRAI shifts.  Data memory is byte-addressed:
+SLL/SRL/SRA and SLLI/SRLI/SRAI shifts, DIV/DIVU/REM/REMU, and
+SLT/SLTU/SLTI/SLTIU.  Data memory is byte-addressed:
 the simulator maps byte_address >> 2 to a word and uses byte lanes for
 LB/LH/LBU/LHU/SB/SH.
 """
@@ -33,9 +34,28 @@ def u32(value):
 
 def sdiv(a, b):
     if b == 0:
-        raise ZeroDivisionError("DIV by zero")
+        return 0xFFFFFFFF
+    a, b = i32(a), i32(b)
     q = abs(a) // abs(b)
     return -q if (a < 0) != (b < 0) else q
+
+
+def srem(a, b):
+    if b == 0:
+        return u32(a)
+    return i32(a) - sdiv(a, b) * i32(b)
+
+
+def udiv(a, b):
+    if u32(b) == 0:
+        return 0xFFFFFFFF
+    return u32(a) // u32(b)
+
+
+def urem(a, b):
+    if u32(b) == 0:
+        return u32(a)
+    return u32(a) % u32(b)
 
 
 class Cpu:
@@ -74,6 +94,16 @@ class Cpu:
                     self.wr(rd, self.r[rs1] * self.r[rs2])
                 elif funct3 == 4 and funct7 == 1:
                     self.wr(rd, sdiv(self.r[rs1], self.r[rs2]))
+                elif funct3 == 5 and funct7 == 1:
+                    self.wr(rd, udiv(self.r[rs1], self.r[rs2]))
+                elif funct3 == 6 and funct7 == 1:
+                    self.wr(rd, srem(self.r[rs1], self.r[rs2]))
+                elif funct3 == 7 and funct7 == 1:
+                    self.wr(rd, urem(self.r[rs1], self.r[rs2]))
+                elif funct3 == 2 and funct7 == 0:
+                    self.wr(rd, 1 if i32(self.r[rs1]) < i32(self.r[rs2]) else 0)
+                elif funct3 == 3 and funct7 == 0:
+                    self.wr(rd, 1 if u32(self.r[rs1]) < u32(self.r[rs2]) else 0)
                 elif funct3 == 1 and funct7 == 0:
                     self.wr(rd, self.r[rs1] << (self.r[rs2] & 31))
                 elif funct3 == 5 and funct7 == 0:
@@ -87,6 +117,10 @@ class Cpu:
                 shamt = (w >> 20) & 0x1F
                 if funct3 == 0:
                     self.wr(rd, self.r[rs1] + imm_i)
+                elif funct3 == 2:
+                    self.wr(rd, 1 if i32(self.r[rs1]) < imm_i else 0)
+                elif funct3 == 3:
+                    self.wr(rd, 1 if u32(self.r[rs1]) < u32(imm_i) else 0)
                 elif funct3 == 1 and funct7 == 0:
                     self.wr(rd, self.r[rs1] << shamt)
                 elif funct3 == 5 and funct7 == 0:
@@ -191,7 +225,7 @@ def load_text(obj):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("obj")
-    ap.add_argument("--test", choices=["vecadd", "matmul", "shift", "mem"], required=True)
+    ap.add_argument("--test", choices=["vecadd", "matmul", "shift", "mem", "div", "slt"], required=True)
     args = ap.parse_args()
 
     program = load_text(args.obj)
@@ -228,7 +262,7 @@ def main():
         want += [u32(i32(v) >> (n & 31)) for v, n in zip(a, sh)]
         want += [u32(v) >> (n & 31) for v, n in zip(a, sh)]
         got = [mem.get(8 + i, 0) for i in range(24)]
-    else:  # mem
+    elif args.test == "mem":
         data = [(0x80017F80 + i * 0x10101) & 0xFFFFFFFF for i in range(4)]
         for i, v in enumerate(data):
             mem[i] = v
@@ -241,6 +275,45 @@ def main():
         want += [(v >> 16) & 0xFFFF for v in data]
         got = []
         for base in (16, 20, 24, 28):
+            got += [mem.get(base + i, 0) for i in range(4)]
+    elif args.test == "div":
+        a = [1, 0xFFFFFFF9, 0x7FFFFFFF, 0x80000000]
+        b = [0, 2, 3, 0xFFFFFFFF]
+        z = [0, 0, 0, 0]
+        data = a + b + z
+        for i, v in enumerate(data):
+            mem[i] = v
+        for tid in range(4):
+            Cpu(program, mem, 0, 4, tid).run()
+        want = []
+        want += [u32(sdiv(x, y)) for x, y in zip(a, b)]
+        want += [u32(srem(x, y)) for x, y in zip(a, b)]
+        want += [udiv(x, y) for x, y in zip(a, b)]
+        want += [urem(x, y) for x, y in zip(a, b)]
+        want += [u32(sdiv(x, 0)) for x in a]
+        want += [u32(srem(x, 0)) for x in a]
+        want += [udiv(x, 0) for x in a]
+        want += [urem(x, 0) for x in a]
+        got = []
+        for base in (12, 16, 20, 24, 28, 32, 36, 40):
+            got += [mem.get(base + i, 0) for i in range(4)]
+    else:  # slt
+        a = [0, 0xFFFFFFFF, 0x7FFFFFFF, 0x80000000]
+        b = [0, 1, 0x7FFFFFFF, 0xFFFFFFFF]
+        data = a + b
+        for i, v in enumerate(data):
+            mem[i] = v
+        for tid in range(4):
+            Cpu(program, mem, 0, 4, tid).run()
+        want = []
+        want += [1 if i32(x) < i32(y) else 0 for x, y in zip(a, b)]
+        want += [1 if u32(x) < u32(y) else 0 for x, y in zip(a, b)]
+        want += [1 if i32(x) < 5 else 0 for x in a]
+        want += [1 if u32(x) < 5 else 0 for x in a]
+        want += [1 if i32(x) < -1 else 0 for x in a]
+        want += [1 if u32(x) < 0xFFFFFFFF else 0 for x in a]
+        got = []
+        for base in (8, 12, 16, 20, 24, 28):
             got += [mem.get(base + i, 0) for i in range(4)]
 
     print(f"{args.test}: got {got}, want {want}, {'OK' if got == want else 'FAIL'}")

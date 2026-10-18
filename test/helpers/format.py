@@ -51,11 +51,21 @@ def format_instruction(instruction: str) -> str:
             }.get(funct7, f"OP/funct7={funct7}")
         if funct3 == "001" and funct7 == "0000000":
             return f"SLL {rd_name}, {rs1_name}, {rs2_name}"
+        if funct3 == "010" and funct7 == "0000000":
+            return f"SLT {rd_name}, {rs1_name}, {rs2_name}"
+        if funct3 == "011" and funct7 == "0000000":
+            return f"SLTU {rd_name}, {rs1_name}, {rs2_name}"
         if funct3 == "101":
             if funct7 == "0000000":
                 return f"SRL {rd_name}, {rs1_name}, {rs2_name}"
             if funct7 == "0100000":
                 return f"SRA {rd_name}, {rs1_name}, {rs2_name}"
+            if funct7 == "0000001":
+                return f"DIVU {rd_name}, {rs1_name}, {rs2_name}"
+        if funct3 == "110" and funct7 == "0000001":
+            return f"REM {rd_name}, {rs1_name}, {rs2_name}"
+        if funct3 == "111" and funct7 == "0000001":
+            return f"REMU {rd_name}, {rs1_name}, {rs2_name}"
         if funct3 == "100" and funct7 == "0000001":
             return f"DIV {rd_name}, {rs1_name}, {rs2_name}"
     elif opcode == "0010011":  # OP-IMM: ADDI / SLLI / SRLI / SRAI (`li rd, imm` when rs1 = x0)
@@ -63,6 +73,10 @@ def format_instruction(instruction: str) -> str:
             if rd == "00000" and rs1 == "00000" and imm == 0:
                 return "NOP"  # ADDI x0, x0, 0
             return f"ADDI {rd_name}, {rs1_name}, #{signed_imm}"
+        if funct3 == "010":
+            return f"SLTI {rd_name}, {rs1_name}, #{signed_imm}"
+        if funct3 == "011":
+            return f"SLTIU {rd_name}, {rs1_name}, #{signed_imm}"
         # Shift-immediates: imm[11:5] acts like funct7 (0000000 / 0100000), imm[4:0] = shamt
         if funct3 == "001" and (imm >> 5) == 0:
             return f"SLLI {rd_name}, {rs1_name}, {imm & 0x1F}"

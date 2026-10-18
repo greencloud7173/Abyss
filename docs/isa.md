@@ -14,10 +14,10 @@
 - **定长 32 位指令**,格式与译码风格**对齐 RISC-V**;数据与地址 32 位;每个线程 32 个寄存器。
 - **执行模型(SIMD)**:一个 core 处理一个 block;block 内 4 个线程(`THREADS_PER_BLOCK`)共享 1 个 fetcher + 1 个 decoder,
   但每个线程各有独立的 ALU、LSU、PC、寄存器堆 —— 同一拍所有线程执行同一条指令。
-- **指令集**:29 条 —— R 型 7 条(`ADD` `SUB` `MUL` `DIV` `SLL` `SRL` `SRA`)、
-  I 型 11 条(`ADDI` `LDR` `JALR` `SLLI` `SRLI` `SRAI` `LB` `LH` `LBU` `LHU`)、
+- **指令集**:37 条 —— R 型 12 条(`ADD` `SUB` `MUL` `DIV` `DIVU` `REM` `REMU` `SLT` `SLTU` `SLL` `SRL` `SRA`)、
+  I 型 12 条(`ADDI` `SLTI` `SLTIU` `LDR` `JALR` `SLLI` `SRLI` `SRAI` `LB` `LH` `LBU` `LHU`)、
   S 型 3 条(`STR` `SB` `SH`)、
-  B 型 6 条(`BEQ` `BNE` `BLT` `BGE` `BLTU` `BGEU`)、U 型 2 条(`LUI` `AUIPC`)、J 型 1 条(`JAL`)、GPU 专用 1 条(`RET`)。
+  B 型 6 条(`BEQ` `BNE` `BLT` `BGE` `BLTU` `BGEU`)、U 型 2 条(`LUI` `AUIPC`)、J 型 1 条(`JAL`)、GPU 专用 1 条(`RET`,也是 I 型编码)。
   除 `RET` 之外**全部与 RISC-V 官方编码逐位一致**(R/I/S/B/U/J 六种类型齐全)。
 - **数据内存按字节寻址**(与 RISC-V 一致):字节 0..3 = 字 0、字节 4..7 = 字 1 ……
   访存单元(LSU)负责 `字节地址 → 字地址 + 字节通道` 的转换,并用**掩码**完成字节/半字读写(第 4.5 节)。
@@ -65,10 +65,15 @@
 | R | `ADD` | `0110011` | `000` | `0000000` | `ADD rd, rs1, rs2` | rd, rs1, rs2 | `add` |
 | R | `SUB` | `0110011` | `000` | `0100000` | `SUB rd, rs1, rs2` | rd, rs1, rs2 | `sub` |
 | R | `MUL` | `0110011` | `000` | `0000001` | `MUL rd, rs1, rs2` | rd, rs1, rs2 | `mul`(M 扩展) |
-| R | `DIV` | `0110011` | `100` | `0000001` | `DIV rd, rs1, rs2` | rd, rs1, rs2 | `div`(M 扩展) |
+| R | `DIV` | `0110011` | `100` | `0000001` | `DIV rd, rs1, rs2` | rd, rs1, rs2(**有符号**商) | `div`(M 扩展) |
+| R | `DIVU` | `0110011` | `101` | `0000001` | `DIVU rd, rs1, rs2` | 同上(**无符号**商) | `divu`(M 扩展) |
+| R | `REM` | `0110011` | `110` | `0000001` | `REM rd, rs1, rs2` | 同上(**有符号**余,符号跟被除数) | `rem`(M 扩展) |
+| R | `REMU` | `0110011` | `111` | `0000001` | `REMU rd, rs1, rs2` | 同上(**无符号**余) | `remu`(M 扩展) |
 | R | `SLL` | `0110011` | `001` | `0000000` | `SLL rd, rs1, rs2` | rd, rs1, rs2(`rs2[4:0]` = 移位量) | `sll` |
 | R | `SRL` | `0110011` | `101` | `0000000` | `SRL rd, rs1, rs2` | 同上(逻辑右移) | `srl` |
 | R | `SRA` | `0110011` | `101` | `0100000` | `SRA rd, rs1, rs2` | 同上(算术右移) | `sra` |
+| R | `SLT` | `0110011` | `010` | `0000000` | `SLT rd, rs1, rs2` | rd=0/1(`rs1 < rs2`,**有符号**) | `slt` |
+| R | `SLTU` | `0110011` | `011` | `0000000` | `SLTU rd, rs1, rs2` | rd=0/1(`rs1 < rs2`,**无符号**) | `sltu` |
 | I | `LDR` | `0000011` | `010` | — | `LDR rd, imm(rs1)` | rd, rs1, imm12 字节偏移 | `lw rd, imm(rs1)` |
 | I | `LB` | `0000011` | `000` | — | `LB rd, imm(rs1)` | 同上(取 1 字节,符号扩展) | `lb` |
 | I | `LH` | `0000011` | `001` | — | `LH rd, imm(rs1)` | 同上(取 2 字节,符号扩展) | `lh` |
@@ -78,6 +83,8 @@
 | S | `SB` | `0100011` | `000` | — | `SB rs2, imm(rs1)` | 同上(只写 1 字节) | `sb` |
 | S | `SH` | `0100011` | `001` | — | `SH rs2, imm(rs1)` | 同上(只写 2 字节) | `sh` |
 | I | `ADDI` | `0010011` | `000` | — | `ADDI rd, rs1, #imm12` | rd, rs1, imm12(符号扩展) | `addi` |
+| I | `SLTI` | `0010011` | `010` | — | `SLTI rd, rs1, #imm12` | rd=0/1(`rs1 < 符号扩展(imm12)`,**有符号**) | `slti` |
+| I | `SLTIU` | `0010011` | `011` | — | `SLTIU rd, rs1, #imm12` | rd=0/1(imm **符号扩展后当无符号**比) | `sltiu` |
 | I | `SLLI` | `0010011` | `001` | —(imm[11:5]=`0000000`) | `SLLI rd, rs1, shamt` | rd, rs1, `imm[4:0]` = 移位量 | `slli` |
 | I | `SRLI` | `0010011` | `101` | —(imm[11:5]=`0000000`) | `SRLI rd, rs1, shamt` | 同上(逻辑右移) | `srli` |
 | I | `SRAI` | `0010011` | `101` | —(imm[11:5]=`0100000`) | `SRAI rd, rs1, shamt` | 同上(算术右移) | `srai` |
@@ -150,12 +157,17 @@ RISC-V 保留的 custom 段分配(便于将来扩展,均已避开官方指令编
 | `000` | `0000000` | `ADD` | `ADD rd, rs1, rs2` | `rd ← rs1 + rs2` | `reg_write=1`,`reg_input_mux=00`,`alu_mux=00` |
 | `000` | `0100000` | `SUB` | `SUB rd, rs1, rs2` | `rd ← rs1 − rs2`(模 2³²) | `reg_write=1`,`reg_input_mux=00`,`alu_mux=01` |
 | `000` | `0000001` | `MUL` | `MUL rd, rs1, rs2` | `rd ← rs1 × rs2`(取低 32 位) | `reg_write=1`,`reg_input_mux=00`,`alu_mux=10` |
-| `100` | `0000001` | `DIV` | `DIV rd, rs1, rs2` | `rd ← rs1 ÷ rs2`(**有符号**,向零取整) | `reg_write=1`,`reg_input_mux=00`,`alu_mux=011` |
+| `100` | `0000001` | `DIV` | `DIV rd, rs1, rs2` | `rd ← rs1 ÷ rs2`(**有符号**,向零取整,x/0 = −1) | `reg_write=1`,`reg_input_mux=00`,`alu_mux=0011` |
+| `101` | `0000001` | `DIVU` | `DIVU rd, rs1, rs2` | `rd ← rs1 ÷ rs2`(**无符号**,x/0 = 2³²−1) | `reg_write=1`,`reg_input_mux=00`,`alu_mux=0111` |
+| `110` | `0000001` | `REM` | `REM rd, rs1, rs2` | `rd ← rs1 mod rs2`(**有符号**,符号跟被除数,x%0 = x) | `reg_write=1`,`reg_input_mux=00`,`alu_mux=1000` |
+| `111` | `0000001` | `REMU` | `REMU rd, rs1, rs2` | `rd ← rs1 mod rs2`(**无符号**,x%0 = x) | `reg_write=1`,`reg_input_mux=00`,`alu_mux=1001` |
 | `001` | `0000000` | `SLL` | `SLL rd, rs1, rs2` | `rd ← rs1 << rs2[4:0]` | `reg_write=1`,`reg_input_mux=00`,`alu_mux=100` |
 | `101` | `0000000` | `SRL` | `SRL rd, rs1, rs2` | `rd ← rs1 >> rs2[4:0]`(**逻辑**) | `reg_write=1`,`reg_input_mux=00`,`alu_mux=101` |
 | `101` | `0100000` | `SRA` | `SRA rd, rs1, rs2` | `rd ← rs1 >>> rs2[4:0]`(**算术**,带符号) | `reg_write=1`,`reg_input_mux=00`,`alu_mux=110` |
+| `010` | `0000000` | `SLT` | `SLT rd, rs1, rs2` | `rd ← (rs1 < rs2) ? 1 : 0`(**有符号**比较) | `reg_write=1`,`reg_input_mux=00`,`alu_mux=1010` |
+| `011` | `0000000` | `SLTU` | `SLTU rd, rs1, rs2` | `rd ← (rs1 < rs2) ? 1 : 0`(**无符号**比较) | `reg_write=1`,`reg_input_mux=00`,`alu_mux=1011` |
 
-`ADD`/`SUB`/`MUL`/`DIV` 的编码与 RISC-V 官方一致(含 M 扩展的 `funct7=0000001`)。
+`ADD`/`SUB`/`MUL`/`DIV`/`SLT`/`SLTU` 的编码与 RISC-V 官方一致(含 M 扩展的 `funct7=0000001`)。
 
 ### 4.2 B 型条件分支(opcode `1100011` = RISC-V BRANCH)
 
@@ -219,6 +231,8 @@ RISC-V 保留的 custom 段分配(便于将来扩展,均已避开官方指令编
 | `0100011` | `000` / `001` | `SB` / `SH` | `SB/SH rs2, imm(rs1)` | 只写 1 / 2 字节 | `mem_write_enable=1`,`mem_size=00/01`,mask 由 lane 算出 |
 | `0010011` | `001` | `SLLI` | `SLLI rd, rs1, shamt` | `rd ← rs1 << shamt`(shamt = `imm[4:0]`,`imm[11:5]` 必须为 0) | `reg_write=1`,`reg_input_mux=00`,`alu_mux=100`,`alu_imm_enable=1` |
 | `0010011` | `101` | `SRLI` / `SRAI` | `SRLI/SRAI rd, rs1, shamt` | `rd ← rs1 >> shamt` / `rd ← rs1 >>> shamt` | 同上,`alu_mux=101` / `110`,靠 `imm[11:5]`(`0000000` / `0100000`)区分 |
+| `0010011` | `010` | `SLTI` | `SLTI rd, rs1, #imm12` | `rd ← (rs1 < imm) ? 1 : 0`(**有符号**) | `reg_write=1`,`reg_input_mux=00`,`alu_mux=1010`,`alu_imm_enable=1` |
+| `0010011` | `011` | `SLTIU` | `SLTIU rd, rs1, #imm12` | `rd ← (rs1 < imm) ? 1 : 0`(**无符号**,imm 先符号扩展) | 同上,`alu_mux=1011` |
 
 - `ADDI` 把 ALU 的 B 操作数从 `rs2` 切到符号扩展后的 `imm12`(`decoded_alu_imm_enable`,ALU 内部一个 2:1 mux),运算仍是 ADD。
   `ADDI rd, x0, #imm` 就是伪指令 `LI rd, #imm`;`ADDI x0, x0, #0` 就是 `NOP`(写入 x0 被忽略,所以真的什么都不做)。
@@ -232,17 +246,24 @@ RISC-V 保留的 custom 段分配(便于将来扩展,均已避开官方指令编
 - 立即数范围:`ADDI` 与访存偏移为 −2048 … 2047(符号扩展);B 型字节偏移为 −4096 … +4094(且必须是 4 的倍数)。
 - 对齐:`LDR`/`STR` 要求 4 字节对齐,`LH`/`LHU`/`SH` 要求 2 字节对齐;不对齐时本实现**不 trap**,而是按所在字 + lane
   截断处理(见第 9 节)。
-- `DIV` 的除数 `rs2` 为 0 时结果为 `x`(见第 9 节);除零、`INT_MIN / -1` 都**未**按 RISC-V 规则特判。
+- `DIV`/`DIVU`/`REM`/`REMU` 四件套对应 RISC-V 的 `div`/`divu`/`rem`/`remu`:**商与余都提供,有符号与无符号都提供**。
+  除零不再传播 `x`,而是按 RISC-V 规则:`DIV`/`DIVU` 返回全 1(`−1` / `0xFFFFFFFF`),`REM`/`REMU` 返回被除数;
+  `INT_MIN / −1` 回绕成 `INT_MIN`(两补码除法溢出,与 RISC-V 一致)。
+- `SLT`/`SLTU`/`SLTI`/`SLTIU` **只写 0 或 1**,不需要新的写回通路(仍走 `reg_input_mux=00`) —— ALU 内部就两个
+  比较器(`<` 有符号 / `<` 无符号),结果零扩展成 32 位送 rd。
+  ⚠️ `SLTIU` 的立即数**先符号扩展再当无符号用**(与 RISC-V 一致):`SLTIU rd, rs1, #-1` 实际是 `rs1 < 0xFFFFFFFF`,
+  而不是 `rs1 < −1`;这正是 C 里 `x < 0xFFFFFFFFu` 编译出来的形式。
 
 ### 4.6 每条指令的执行阶段
 
 | 指令 | 读寄存器 | 计算 / 访存 | 写回 |
 | - | - | - | - |
-| `ADD` `SUB` `MUL` `DIV` | `REQUEST` 采样 rs、rt | `EXECUTE` ALU 运算 | `UPDATE` 写 rd |
+| `ADD` `SUB` `MUL` `DIV` `DIVU` `REM` `REMU` | `REQUEST` 采样 rs、rt | `EXECUTE` ALU 运算 | `UPDATE` 写 rd |
 | `SLL` `SRL` `SRA` `SLLI` `SRLI` `SRAI` | `REQUEST` 采样 rs1、rs2 | `EXECUTE` 桶形移位器(1 拍) | `UPDATE` 写 rd |
 | `LDR` `LB` `LH` `LBU` `LHU` | `REQUEST` 采样 rs1(基址) | 字节地址→字地址+lane;`REQUEST` 发起读,`WAIT` 等应答 | `UPDATE` 写 rd(选择 lane 后扩展) |
 | `STR` `SB` `SH` | `REQUEST` 采样 rs1(基址)、rs2(数据) | 同上;写数据移位到 lane,并带 4 位字节掩码 | — |
 | `ADDI` | `REQUEST` 采样 rs1 | `EXECUTE` ALU 加立即数 | `UPDATE` 写 rd |
+| `SLT` `SLTU` `SLTI` `SLTIU` | `REQUEST` 采样 rs1、rs2(或立即数) | `EXECUTE` ALU 比较,得出 0/1 | `UPDATE` 写 rd |
 | `LUI` | 无需读(rs1 强指 `x0`) | `EXECUTE` ALU 加 `imm20<<12` | `UPDATE` 写 rd |
 | `AUIPC` | — | `EXECUTE` PC 单元算 `PC + imm` | `UPDATE` 写 rd |
 | `JAL` | — | `EXECUTE` 算目标 PC | `UPDATE` 写 rd(链接值)**并**改 PC |
@@ -327,7 +348,9 @@ J 型:instr = (imm[20] << 31) | (imm[10:1] << 21) | (imm[11] << 20) | (imm[19:12
 | 本 ISA | 等价 RISC-V | 是否逐位相同 |
 | - | - | - |
 | `ADD/SUB/MUL/DIV` | `add/sub/mul/div` | ✅(含 M 扩展 funct7) |
+| `DIVU/REM/REMU` | `divu/rem/remu` | ✅(funct3 `101`/`110`/`111` + funct7 `0000001`) |
 | `SLL/SRL/SRA` | `sll/srl/sra` | ✅ |
+| `SLT/SLTU` / `SLTI/SLTIU` | `slt/sltu` / `slti/sltiu` | ✅(funct3 `010`/`011` 完全一致) |
 | `SLLI/SRLI/SRAI` | `slli/srli/srai` | ✅(imm[11:5] 的 0000000 / 0100000 完全一致) |
 | `ADDI rd, rs1, #imm` | `addi rd, rs1, imm` | ✅ |
 | `LDR rd, imm(rs1)` | `lw rd, imm(rs1)` | ✅ |
@@ -360,14 +383,24 @@ J 型:instr = (imm[20] << 31) | (imm[10:1] << 21) | (imm[11] << 20) | (imm[19:12
 | `ADD R6, R4, R5` | **0x00520333** |
 | `SUB R7, R13, R7` | **0x407683B3** |
 | `DIV R6, R13, R2` | **0x0226C333** |
-| `BLT R9, R2, LOOP`(偏移 −36 字节 = 往回 9 条) | **0xFC24CEE3** || `JAL R5, 12`(链接值 4) | **0x00C002EF** |
+| `BLT R9, R2, LOOP`(偏移 −36 字节 = 往回 9 条) | **0xFC24CEE3** |
+| `JAL R5, 12`(链接值 4) | **0x00C002EF** |
 | `JALR x0, 0(R5)`(返回) | **0x00028067** |
 | `JALR R7, 1(R6)`(目标 = `(R6+1) >>> 2`) | **0x001303E7** |
 | `SLLI R2, R1, 3`(R1=6 → 48) | **0x00309113** |
 | `SRLI R3, R2, 2`(48 → 12) | **0x00215193** |
 | `SRAI R5, R4, 1`(R4=-8 → -4) | **0x40125293** |
 | `SRL R10, R2, R7`(48 >> R7[4:0]) | **0x00715533** |
-| `SRA R11, R4, R7`(-8 >>> R7[4:0]) | **0x407255B3** || `LUI R1, 0x12345` | **0x123450B7** |
+| `SRA R11, R4, R7`(-8 >>> R7[4:0]) | **0x407255B3** |
+| `DIV R4, R1, R2` | **0x0220C233** |
+| `DIVU R6, R1, R2` | **0x0220D333** |
+| `REM R5, R1, R2` | **0x0220E2B3** |
+| `REMU R7, R1, R2` | **0x0220F3B3** |
+| `SLT R4, R1, R2` | **0x0020A233** |
+| `SLTU R5, R1, R2` | **0x0020B2B3** |
+| `SLTI R6, R1, #5` | **0x0050A313** |
+| `SLTIU R7, R1, #-1`(即 `R1 < 0xFFFFFFFF` 无符号) | **0xFFF0B393** |
+| `LUI R1, 0x12345` | **0x123450B7** |
 | `AUIPC R2, 0x00000` | **0x00000117** |
 | `AUIPC R5, 0x00001` | **0x00001297** |
 | `JAL R3, 8`(链接值 = `PC+4`) | **0x008001EF** |
@@ -434,7 +467,9 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 | 向 `x0` 写(`rd = 0`) | 静默忽略(所以 `ADDI x0, ...` 真的无副作用) |
 | 指令里未使用的字段非 0 | 被忽略(硬件只看它需要的切片;注意 `ADDI` 的 rs1 是**有效**字段;`LUI` 的 rs1/rs2/funct3 都属于立即数,不影响行为) |
 | 向 `R29`–`R31` 写(`rd >= 29`) | 静默忽略,不产生写动作 |
-| `DIV` 且 `rs2 == 0` | `rs1 / 0` 在 Verilog 里是 `x`,会写进 rd 并向外扩散(曾让测试崩在 `int('XX...', 2)`);RISC-V 规定 `div` 除零返回 −1,本实现**未**实现该规则 |
+| `DIV`/`DIVU` 且 `rs2 == 0` | 返回全 1(`−1` / `0xFFFFFFFF`),不再传播 `x`(2026-10 起对齐 RISC-V) |
+| `REM`/`REMU` 且 `rs2 == 0` | 返回**被除数**(RISC-V 语义) |
+| `DIV`/`REM` 且 `rs1 = INT_MIN, rs2 = −1` | 商回绕成 `INT_MIN`,余数 0(两补码除法溢出) |
 | 读未初始化 / 越界的数据内存 | 测试的 `Memory` 是稀疏 `defaultdict(int)`,读到 0 |
 | 分支目标超出程序长度 | 取到全 0(NOP)后继续顺序执行,不 trap |
 | B/J 型偏移不是 4 的倍数 | 低两位被右移丢弃(硬件只取 `imm >>> 2`),等价于向下取整到 4 的倍数 |
@@ -576,6 +611,25 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
    `start.s` 里为那个 hack 预置的三个常量(R23/R27/R28)可以删掉。
 5. 代价:**每线程一个 32 位桶形移位器**(5 级 2:1 mux),这是本次唯一的实际面积开销。
 
+### 除法家族补齐:DIVU / REM / REMU(2026-10)
+
+| 项 | 改动前 | 现在 |
+| - | - | - |
+| 除法 | 只有 `DIV`(有符号商) | **`DIV`/`DIVU`/`REM`/`REMU`** 四条(`funct3` `100`–`111`,funct7 `0000001`) |
+| 除零 | Verilog 的 `/0` 产生 `x`,写进 rd 后会扩散到整条数据通路 | 按 RISC-V:商返回全 1,余返回被除数 |
+| ALU 操作码 | 3 位(7 个操作) | **4 位**(10 个操作,`0000`–`1001`) |
+| 编译器侧 `%` | `DIV`+`MUL`+`SUB` 三指令模拟(R26 做 scratch) | 先仍是三指令模拟,`.td` 补齐后已改为直通(见下一小节) |
+
+影响:
+
+1. ⚠️ 踩到一个真实的 Verilog 坑:`alu_out_reg <= cond ? {N{1'b1}} : (rs_signed / operand_b);` 里
+   因为一个分支是无符号字面量,整个条件表达式被当成**无符号**,`div` 静默变成了 `divu`
+   (−7/2 得到 `0x7FFFFFFC`)。修法:先把四个结果算进各自 `signed`/无符号的中间 wire,再做 mux。
+2. 操作码扩到 4 位 → `alu.sv` / `decoder.sv` / `core.sv` 同步;前 7 个操作的编码值保持不变。
+3. 四条除/余指令共用同一个除法器(商与余数通常同时可用),新增面积很少。
+4. 已验证:`−7/2 = −3`、`−7%2 = −1`、无符号 `0xFFFFFFF9/2 = 0x7FFFFFFC`、`0xFFFFFFF9%2 = 1`、
+   四种除零情况、`INT_MIN / −1` 回绕。
+
 ### 字节寻址 + 字节/半字访存(2026-10)
 
 | 项 | 改动前 | 现在 |
@@ -602,6 +656,49 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 | ISA 名称 | "tiny-gpu 32-bit ISA" | **Abyss ISA** |
 | 手册位置 | `isa/isa.md` | **`docs/isa.md`**(单一副本,不再维护两份) |
 
+### LLVM 后端补齐除法 + C 除法测试(2026-10)
+
+| 项 | 改动前 | 现在 |
+| - | - | - |
+| `AbyssInstrInfo.td` | 只有 `DIV`(`funct3 100`) | 补上 `DIVU`(`101`)、`REM`(`110`)、`REMU`(`111`),funct7 同为 `0000001` |
+| `riscv2abyss.py` 的 `%` | 展开成 `DIV` + `MUL` + `SUB`(占 `R26`) | **直通 `REM`/`REMU`**;`R26` 释放 |
+| C 侧测试 | 无 | **`test/div`**:一次跑完 `a/b`、`a%b`、`ua/ub`、`ua%ub` 和四种除零情况(32 个断言)
+ |
+
+要点:
+
+1. 三条指令的编码与 RISC-V 逐位一致,`llvm-mc -arch=abyss --show-encoding` 可直接验:
+   `DIV R4,R1,R2 = 0x0220C233`、`DIVU R6,R1,R2 = 0x0220D333`、
+   `REM R5,R1,R2 = 0x0220E2B3`、`REMU R7,R1,R2 = 0x0220F3B3`。
+2. ⚠️ 改完 `.td` 必须重跑 `ninja -C build llvm-mc`,否则汇编器仍报 "unrecognized
+instruction mnemonic"。
+3. ⚠️ 发现的 LLVM 行为:同一对操作数同时出现 `a / b` 和 `a % b` 时,**RISC-V 后端会把
+它们折成 `div` + `mul` + `sub`**
+   (`SDIVREM` 合并),根本不生成 `rem`。测试里用 `az = a + z`(`z` 是运行期 0)绕开,才能
+真正覆盖 `REM`/`REMU`。
+4. matmul 内核去掉 3 条模拟指令的其中一条后,仿真时间 11475 → 10925 µs。
+
+### 比较指令补齐:`SLT` / `SLTU` / `SLTI` / `SLTIU`(2026-10)
+
+| 项 | 改动前 | 现在 |
+| - | - | - |
+| 比较指令 | **没有**:比较只作为分支的条件存在,结果进不了寄存器 | **`SLT`/`SLTU`**(R 型 `funct3 010`/`011`)+ **`SLTI`/`SLTIU`**(I 型同 funct3) |
+| ALU 操作码 | 4 位,10 个操作(`0000`–`1001`) | **仍是 4 位**,12 个操作(加 `1010` SLT / `1011` SLTU) |
+| 写回通路 | — | **不变**:比较结果是 0/1,直接走 `reg_input_mux=00`(ALU) |
+| 编译器侧 `<` | 展开成 `ADDI`+`BGE`+`ADDI`+`ADDI`(4~5 条,占 `R24`/`R25`) | **单条指令直通**;`R24`/`R25` 释放 |
+| C 侧测试 | 无 | **`test/slt`**:符号/无符号、正/负立即数、相等情形共 24 个断言 |
+
+影响:
+
+1. `alu.sv` 只加了两个比较器(`rs_signed < operand_b`、`rs < operand_b_unsigned`)
+   和两条 `case` 分支,结果零扩展成 32 位;**没有新增 mux、也没有新增写回来源**。
+2. `decoder.sv` 的 `OP`/`OP_IMM` 两个 `case (funct3)` 各加两项(共 4 条指令)。
+3. ⚠️ `SLTIU` 的立即数**符号扩展后当无符号**比较(RISC-V 语义):`SLTIU rd, rs1, #-1` 是
+   `rs1 < 0xFFFFFFFF`。C 里 `0u < -1` 那种写法、以及 `x < 0xFFFFFFFFu`,都会编译成它。
+4. 编码与 RISC-V 逐位一致:`SLT R4,R1,R2 = 0x0020A233`、`SLTU R5,R1,R2 = 0x0020B2B3`、
+   `SLTI R6,R1,#5 = 0x0050A313`、`SLTIU R7,R1,#-1 = 0xFFF0B393`。
+5. 至此 RISC-V **RV32I + M** 的整数部分只剩 `AND/OR/XOR` 与 `ANDI/ORI/XORI` 没做。
+
 ## 11. 与 RTL 的对应关系
 
 | 手册里的概念 | RTL 位置 |
@@ -621,7 +718,7 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 | - | - | - |
 | `decoded_reg_input_mux` | `00` ALU / `01` LSU / `10` PC 单元 | 选择写回 rd 的数据来源(`LUI` 用 `00`,`JAL`/`AUIPC` 用 `10`) |
 | `decoded_alu_imm_enable` | `1` | ALU 的 B 操作数改用立即数(`ADDI` / `LUI`) |
-| `decoded_alu_arithmetic_mux` | `000` ADD / `001` SUB / `010` MUL / `011` DIV / `100` SLL / `101` SRL / `110` SRA | ALU 运算选择(3 位,移位量取 B 操作数低 5 位) |
+| `decoded_alu_arithmetic_mux` | `0000` ADD / `0001` SUB / `0010` MUL / `0011` DIV / `0100` SLL / `0101` SRL / `0110` SRA / `0111` DIVU / `1000` REM / `1001` REMU / `1010` SLT / `1011` SLTU | ALU 运算选择(4 位;移位量取 B 操作数低 5 位) |
 | `decoded_branch_enable` | `1` | PC 走分支逻辑(B 型) |
 | `decoded_branch_cond` | `= funct3` | 选择分支条件(`000` BEQ / `001` BNE / `100` BLT / `101` BGE / `110` BLTU / `111` BGEU) |
 | `decoded_jump_enable` | `1` | 无条件跳转 + 链接(`JAL`) |
@@ -639,10 +736,10 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 | ~~无移位指令~~ | **2026-10 已补** `SLL/SRL/SRA` + `SLLI/SRLI/SRAI`(ALU 多一个 32 位桶形移位器) | — |
 | 无 `JALR` | ~~只有直接跳转,没有间接跳转/返回~~ **2026-10 已补** | — |
 | 无 ABI / 栈 | 有 `JAL`/`JALR`,但未约定 `ra`/`sp`/参数寄存器/栈布局 | 定 ABI + 编译器后端 |
-| 无 `SLT`/`SLTI`/`SLTU` | 比较结果只用于分支,不进寄存器 | ALU 比较结果写回通路(mux 已够用,`reg_input_mux` 还有空余) |
+| ~~无 `SLT`/`SLTI`/`SLTU`~~ | **2026-10 已补** `SLT`/`SLTU`/`SLTI`/`SLTIU`(ALU 直接出 0/1,写回仍走 `reg_input_mux=00`) | — |
 | 无字节/半字访存与扩展加载 | ~~只有字的 `LDR`/`STR`~~ **2026-10 已补** `LB/LH/LBU/LHU/SB/SH` | — |
 | 无 `FW`/`FLW` 等浮点访存 | 只有整数 | — |
-| 无 `DIVU` / `REM` | 只有有符号 `DIV` | ALU 再加一条运算(OP 的 funct3 `101` 空着) |
+| ~~无 `DIVU` / `REM`~~ | **2026-10 已补** `DIVU`/`REM`/`REMU`(除零也按 RISC-V 规则处理) | — |
 | ~~数据内存按**字**寻址~~ | **2026-10 已改为字节寻址**(LSU 内做 `>>2` + lane 选择/掩码) | — |
 | 无 `CSR` / 系统指令 | — | — |
 

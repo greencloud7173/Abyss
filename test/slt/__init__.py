@@ -1,0 +1,1 @@
+"""SLT instruction test case."""

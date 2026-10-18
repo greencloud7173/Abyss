@@ -36,7 +36,7 @@ module decoder (
     output reg [1:0] decoded_mem_size,             // Access width: 00 byte, 01 half, 10 word
     output reg decoded_mem_unsigned,               // Zero-extend narrow loads (LBU / LHU)
     output reg [1:0] decoded_reg_input_mux,        // Select input to register
-    output reg [2:0] decoded_alu_arithmetic_mux,   // Select arithmetic operation
+    output reg [3:0] decoded_alu_arithmetic_mux,   // Select arithmetic operation
     output reg decoded_alu_imm_enable,             // Use the immediate as the ALU B operand (ADDI / LUI)
     output reg decoded_branch_enable,              // Branch (B-type) instruction
     output reg [2:0] decoded_branch_cond,          // Branch condition (= funct3)
@@ -46,7 +46,7 @@ module decoder (
     output reg decoded_ret
 );
     // Opcodes (instruction[6:0]); like RISC-V's 32-bit instructions, the low two bits are `11`
-    localparam OP = 7'b0110011,      // RISC-V OP:     ADD / SUB / MUL / DIV
+    localparam OP = 7'b0110011,      // RISC-V OP:     ADD / SUB / MUL / DIV / SLT / SLTU
         OP_IMM = 7'b0010011,         // RISC-V OP-IMM: ADDI (`li rd, imm` when rs1 = x0)
         LOAD = 7'b0000011,           // RISC-V LOAD:   LDR (= `lw rd, imm(rs1)`)
         STORE = 7'b0100011,          // RISC-V STORE:  STR (= `sw rs2, imm(rs1)`)
@@ -60,8 +60,12 @@ module decoder (
     // funct3 fields
     localparam F3_ADD_SUB_MUL = 3'b000, // OP: add / sub / mul; OP-IMM: addi
         F3_SLL = 3'b001,                // OP: sll;   OP-IMM: slli
+        F3_SLT = 3'b010,                // OP: slt;   OP-IMM: slti  (also LOAD lw / STORE sw)
+        F3_SLTU = 3'b011,               // OP: sltu;  OP-IMM: sltiu
         F3_DIV = 3'b100,                // OP: div
-        F3_SRL_SRA = 3'b101,            // OP: srl / sra; OP-IMM: srli / srai
+        F3_SRL_SRA = 3'b101,            // OP: srl / sra / divu; OP-IMM: srli / srai
+        F3_REM = 3'b110,                // OP: rem
+        F3_REMU = 3'b111,               // OP: remu
         F3_LW = 3'b010,                 // LOAD: lw (also the width selector for LB/LH/LBU/LHU)
         F3_SW = 3'b010;                 // STORE: sw (also the width selector for SB/SH)
 
@@ -84,13 +88,18 @@ module decoder (
         F7_MULDIV = 7'b0000001;
 
     // ALU operation encodings (must match src/alu.sv)
-    localparam ALU_ADD = 3'b000,
-        ALU_SUB = 3'b001,
-        ALU_MUL = 3'b010,
-        ALU_DIV = 3'b011,
-        ALU_SLL = 3'b100,
-        ALU_SRL = 3'b101,
-        ALU_SRA = 3'b110;
+    localparam ALU_ADD = 4'b0000,
+        ALU_SUB = 4'b0001,
+        ALU_MUL = 4'b0010,
+        ALU_DIV = 4'b0011,
+        ALU_SLL = 4'b0100,
+        ALU_SRL = 4'b0101,
+        ALU_SRA = 4'b0110,
+        ALU_DIVU = 4'b0111,
+        ALU_REM = 4'b1000,
+        ALU_REMU = 4'b1001,
+        ALU_SLT = 4'b1010,
+        ALU_SLTU = 4'b1011;
 
     always @(posedge clk) begin 
         if (reset) begin 
@@ -169,6 +178,22 @@ module decoder (
                                     decoded_alu_arithmetic_mux <= ALU_SLL;
                                 end
                             end
+                            F3_SLT: begin
+                                // SLT rd, rs1, rs2 (signed compare, rd = 0/1)
+                                if (instruction[31:25] == F7_ADD) begin 
+                                    decoded_reg_write_enable <= 1;
+                                    decoded_reg_input_mux <= 2'b00;
+                                    decoded_alu_arithmetic_mux <= ALU_SLT;
+                                end
+                            end
+                            F3_SLTU: begin
+                                // SLTU rd, rs1, rs2 (unsigned compare, rd = 0/1)
+                                if (instruction[31:25] == F7_ADD) begin 
+                                    decoded_reg_write_enable <= 1;
+                                    decoded_reg_input_mux <= 2'b00;
+                                    decoded_alu_arithmetic_mux <= ALU_SLTU;
+                                end
+                            end
                             F3_DIV: begin
                                 if (instruction[31:25] == F7_MULDIV) begin 
                                     decoded_reg_write_enable <= 1;
@@ -177,7 +202,7 @@ module decoder (
                                 end
                             end
                             F3_SRL_SRA: begin
-                                // SRL (funct7 = 0000000) / SRA (funct7 = 0100000)
+                                // SRL (funct7 = 0000000) / SRA (funct7 = 0100000) / DIVU (0000001)
                                 if (instruction[31:25] == F7_ADD) begin 
                                     decoded_reg_write_enable <= 1;
                                     decoded_reg_input_mux <= 2'b00;
@@ -186,13 +211,34 @@ module decoder (
                                     decoded_reg_write_enable <= 1;
                                     decoded_reg_input_mux <= 2'b00;
                                     decoded_alu_arithmetic_mux <= ALU_SRA;
+                                end else if (instruction[31:25] == F7_MULDIV) begin 
+                                    decoded_reg_write_enable <= 1;
+                                    decoded_reg_input_mux <= 2'b00;
+                                    decoded_alu_arithmetic_mux <= ALU_DIVU;
+                                end
+                            end
+                            F3_REM: begin
+                                // REM rd, rs1, rs2 (signed remainder)
+                                if (instruction[31:25] == F7_MULDIV) begin 
+                                    decoded_reg_write_enable <= 1;
+                                    decoded_reg_input_mux <= 2'b00;
+                                    decoded_alu_arithmetic_mux <= ALU_REM;
+                                end
+                            end
+                            F3_REMU: begin
+                                // REMU rd, rs1, rs2 (unsigned remainder)
+                                if (instruction[31:25] == F7_MULDIV) begin 
+                                    decoded_reg_write_enable <= 1;
+                                    decoded_reg_input_mux <= 2'b00;
+                                    decoded_alu_arithmetic_mux <= ALU_REMU;
                                 end
                             end
                         endcase
                     end
                     OP_IMM: begin 
                         // Immediate arithmetic, selected by funct3:
-                        //   000 ADDI, 001 SLLI, 101 SRLI / SRAI (imm[11:5] = funct7-like)
+                        //   000 ADDI, 001 SLLI, 010 SLTI, 011 SLTIU,
+                        //   101 SRLI / SRAI (imm[11:5] = funct7-like)
                         // ADDI is `li rd, imm` when rs1 = x0, and `nop` when rd = rs1 = x0, imm = 0
                         case (instruction[14:12])
                             F3_ADD_SUB_MUL: begin 
@@ -200,6 +246,20 @@ module decoder (
                                 decoded_reg_input_mux <= 2'b00;     // write back ALU result
                                 decoded_alu_arithmetic_mux <= ALU_ADD;
                                 decoded_alu_imm_enable <= 1;        // B operand = imm12
+                            end
+                            F3_SLT: begin 
+                                // SLTI rd, rs1, #imm12 (signed compare with the immediate)
+                                decoded_reg_write_enable <= 1;
+                                decoded_reg_input_mux <= 2'b00;
+                                decoded_alu_arithmetic_mux <= ALU_SLT;
+                                decoded_alu_imm_enable <= 1;        // B operand = imm12
+                            end
+                            F3_SLTU: begin 
+                                // SLTIU rd, rs1, #imm12 (imm is sign-extended, then compared unsigned)
+                                decoded_reg_write_enable <= 1;
+                                decoded_reg_input_mux <= 2'b00;
+                                decoded_alu_arithmetic_mux <= ALU_SLTU;
+                                decoded_alu_imm_enable <= 1;
                             end
                             F3_SLL: begin 
                                 // SLLI rd, rs1, shamt (shamt = imm[4:0], imm[11:5] must be 0)

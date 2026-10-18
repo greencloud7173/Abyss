@@ -91,7 +91,6 @@ def emit_li(rd, imm, out):
 
 def translate(text):
     out = []
-    slt_id = 0
 
     for raw in text.splitlines():
         line = raw.split("#", 1)[0].strip()
@@ -142,15 +141,13 @@ def translate(text):
                 out.append(f"BLT {rs}, x0, {lab}")
             else:  # bgtz
                 out.append(f"BLT x0, {rs}, {lab}")
-        elif mnem in ("add", "sub", "mul", "div"):
+        elif mnem in ("add", "sub", "mul", "div", "divu", "rem", "remu",
+                      "slt", "sltu"):
             rd, rs1, rs2 = (reg(x) for x in ops[:3])
             out.append(f"{mnem.upper()} {rd}, {rs1}, {rs2}")
-        elif mnem == "rem":
-            rd, rs1, rs2 = (reg(x) for x in ops[:3])
-            # R26 is reserved as a translator scratch register.
-            out.append(f"DIV R26, {rs1}, {rs2}")
-            out.append(f"MUL R26, R26, {rs2}")
-            out.append(f"SUB {rd}, {rs1}, R26")
+        elif mnem in ("slti", "sltiu"):
+            rd, rs1 = reg(ops[0]), reg(ops[1])
+            out.append(f"{mnem.upper()} {rd}, {rs1}, #{parse_imm(ops[2])}")
         elif mnem == "addi":
             rd, rs1 = reg(ops[0]), reg(ops[1])
             out.append(f"ADDI {rd}, {rs1}, #{parse_imm(ops[2])}")
@@ -189,27 +186,6 @@ def translate(text):
                 rd = reg(ops[0])
                 base, off = parse_mem(ops[1])
                 out.append(f"JALR {rd}, {off}({reg(base)})")
-        elif mnem in ("slt", "sltu"):
-            rd, rs1, rs2 = (reg(x) for x in ops[:3])
-            lab = f".Labyss_slt_{slt_id}"
-            slt_id += 1
-            bcc = "BGE" if mnem == "slt" else "BGEU"
-            out.append("ADDI R24, x0, #0")
-            out.append(f"{bcc} {rs1}, {rs2}, {lab}")
-            out.append("ADDI R24, x0, #1")
-            out.append(f"{lab}:")
-            out.append(f"ADDI {rd}, R24, #0")
-        elif mnem in ("slti", "sltiu"):
-            rd, rs1 = reg(ops[0]), reg(ops[1])
-            emit_li("R25", parse_imm(ops[2]), out)
-            lab = f".Labyss_slt_{slt_id}"
-            slt_id += 1
-            bcc = "BGE" if mnem == "slti" else "BGEU"
-            out.append("ADDI R24, x0, #0")
-            out.append(f"{bcc} {rs1}, R25, {lab}")
-            out.append("ADDI R24, x0, #1")
-            out.append(f"{lab}:")
-            out.append(f"ADDI {rd}, R24, #0")
         elif mnem in ("slli", "srli", "srai"):
             rd, rs1 = reg(ops[0]), reg(ops[1])
             sh = parse_imm(ops[2])

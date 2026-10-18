@@ -46,6 +46,24 @@ test/
     build/
       mem.o
       mem.bin
+  div/
+    __init__.py
+    test_div.py
+    src/
+      div.c
+      start.s
+    build/
+      div.o
+      div.bin
+  slt/
+    __init__.py
+    test_slt.py
+    src/
+      slt.c
+      start.s
+    build/
+      slt.o
+      slt.bin
 ```
 
 ## 运行
@@ -57,12 +75,16 @@ make test matadd
 make test matmul
 make test shift
 make test mem
+make test div
+make test slt
 
 # 等价写法
 make test_matadd
 make test_matmul
 make test_shift
 make test_mem
+make test_div
+make test_slt
 make test CASE=matadd
 ```
 
