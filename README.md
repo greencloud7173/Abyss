@@ -221,10 +221,17 @@ void kernel(void) {
 }
 ```
 
-矩阵用 `ABYSS_MATRIX` 声明成真正的 C 二维数组类型，既支持 `(*A)[i][j]` 的二维访问，
-也允许 `ABYSS_MAT_FLAT(A)[idx]` 或强制转换做一维访问；一维数据统一写成 `N x 1` /
-`1 x N` 矩阵。`ABYSS_MAT_ADD` / `ABYSS_MAT_MUL` 会用数组类型和
-`_Static_assert` 在**编译期**检查维度与元素类型（详见 [`tools/README.md`](tools/README.md)）。
+测试内核采用 CUDA 风格：输入使用带初始化的普通 C 数组，数据用 `a[i]` 写入
+`abyss_mem()` 指向的 DRAM，例如：
+
+```c
+int a[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+int *A = (int *)abyss_mem(0);
+A[i] = a[i];
+```
+
+二维数据直接写成 `int a[n][n] = {...}`。后端会把这种常量局部数组物化到线程栈帧，
+不再依赖 Python 预填 DRAM。`ABYSS_MATRIX` 仍作为可选的带维度 API 保留。
 
 支持的 C 子集：`int`/`unsigned`/`char`/`short`、算术、位运算、移位、除余、比较、分支、循环、
 `phi`/`select`、`alloca`、函数调用（≤8 参数）。不支持浮点、64 位、全局变量、PIC、libc、可变参数。
@@ -235,6 +242,7 @@ void kernel(void) {
 
 每个用例的流程是"写 C → 编译链接 → 载入 RTL → 跑完 `done` → 用 Python 参考模型逐字比对内存"。
 数据内存上电全为 0，测试输入由 C 内核自己写入；Python 只保留参考模型和断言，不再预填 DRAM。
+构建时会在 `test/<case>/build/<case>.s` 保留生成的汇编文件。
 
 | 用例 | 覆盖内容 |
 | - | - |

@@ -4,6 +4,7 @@
 #   include ../common.mk
 #
 # Build:
+#   clang --target=abyss -S <case>.c       (kernel assembly, kept in build/)
 #   clang --target=abyss -c <case>.c       (kernel object)
 #   llvm-mc -arch=abyss <start.s>          (startup object)
 #   ld.lld --image-base=0 -Ttext=0         (ELF link)
@@ -22,6 +23,7 @@ SRC ?= $(CURDIR)/src
 KERNEL_C := $(SRC)/$(CASE).c
 START_S := $(SRC)/start.s
 KERNEL_O := $(BUILD)/$(CASE).o
+KERNEL_ASM := $(BUILD)/$(CASE).s
 START_O := $(BUILD)/start.o
 ELF := $(BUILD)/$(CASE).elf
 BIN := $(BUILD)/$(CASE).bin
@@ -68,10 +70,14 @@ all: test
 $(BUILD):
 	mkdir -p $@
 
+ABYSS_CFLAGS := --target=abyss -O2 -fno-pic -fno-delete-null-pointer-checks \
+	-fno-vectorize -fno-slp-vectorize -nostdlib -I $(ROOT)/tools
+
+$(KERNEL_ASM): $(KERNEL_C) $(HEADERS) | $(BUILD)
+	$(ABYSS_CLANG) $(ABYSS_CFLAGS) -S $< -o $@
+
 $(KERNEL_O): $(KERNEL_C) $(HEADERS) | $(BUILD)
-	$(ABYSS_CLANG) --target=abyss -O2 -fno-pic -fno-delete-null-pointer-checks \
-		-fno-vectorize -fno-slp-vectorize \
-		-nostdlib -I $(ROOT)/tools -c $< -o $@
+	$(ABYSS_CLANG) $(ABYSS_CFLAGS) -c $< -o $@
 
 $(START_O): $(START_S) | $(BUILD)
 	$(LLVM_MC) -arch=abyss -filetype=obj $< -o $@
@@ -82,7 +88,7 @@ $(ELF): $(START_O) $(KERNEL_O)
 $(BIN): $(ELF)
 	$(LLVM_OBJCOPY) -O binary --only-section=.text $< $@
 
-compile: $(BIN)
+compile: $(BIN) $(KERNEL_ASM)
 
 ifeq ($(SIM),verilator)
 # Verilator model of the whole GPU, shared by every test case (build/vsim).
@@ -99,11 +105,11 @@ $(VLT_TOP): $(ROOT)/build/gpu.v $(VLT_CPP)
 		$(ROOT)/build/gpu.v $(VLT_CPP)
 	$(MAKE) -C $(VLT_BUILD) -f Vtop.mk -j$(shell nproc)
 
-test: $(BIN) $(VLT_TOP)
+test: $(BIN) $(KERNEL_ASM) $(VLT_TOP)
 	cd $(ROOT) && env COCOTB_TEST_MODULES=test.$(CASE).test_$(CASE) \
 		COCOTB_TOPLEVEL=gpu $(VLT_TOP)
 else
-test: $(BIN)
+test: $(BIN) $(KERNEL_ASM)
 	$(MAKE) -C $(ROOT) sim
 	cd $(ROOT) && env COCOTB_TEST_MODULES=test.$(CASE).test_$(CASE) \
 		vvp -m $(COCOTB_VPI) $(RTL_SIM)

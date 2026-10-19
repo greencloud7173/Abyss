@@ -56,6 +56,7 @@ make -C test/matadd
 - `build/<case>.bin`：提取 `.text`
 - 调用根目录的 `make sim` 构建共享 RTL 仿真器，再运行 cocotb
 - DRAM 上电全为 0；C 内核负责写入测试输入，Python 只提供参考模型和断言
+- 每次构建都会保留 `build/<case>.s`，方便检查生成的汇编
 
 测试产物位于 `test/<case>/build/`，已被 `.gitignore` 忽略。
 
@@ -83,8 +84,30 @@ make -C test/matadd ABYSS_CLANG=/path/to/clang LLVM_MC=/path/to/llvm-mc
 | `examples/` | 示例 C 内核 |
 | `start_*.s` | 示例启动 stub |
 
+## CUDA 风格内核
+
+当前测试内核直接使用普通 C 数组和 flat 索引。输入数据在声明处初始化，随后写入
+`abyss_mem()` 指向的 DRAM：
+
+```c
+int a[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+int b[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+
+int *A = (int *)abyss_mem(0);
+int *B = (int *)abyss_mem(32);
+int *C = (int *)abyss_mem(64);
+
+A[i] = a[i];
+B[i] = b[i];
+C[i] = A[i] + B[i];
+```
+
+二维矩阵同样直接声明为 `int a[n][n] = {...}`。编译器会把局部常量数组提升为
+常量全局，Abyss 后端会把它们物化到每个线程的栈帧中，因此不需要额外的只读数据段。
+
 ## 矩阵类型与编译期检查
 
+`ABYSS_MATRIX` 仍作为可选的带维度 API 保留；测试内核本身使用上面的普通 C 数组风格。
 不再使用 `ABYSS_LD/ABYSS_ST` 这类把地址和访存都藏在宏里的接口。普通指针直接指向
 字节地址：
 

@@ -21,24 +21,20 @@
  */
 #define ITERATIONS 200
 
-ABYSS_MATRIX(abyss_i32_4x1, int, 4, 1);
 
 void kernel(void) {
   int i = __abyss_linear_idx();
-  abyss_i32_4x1 *seed_ptr = (abyss_i32_4x1 *)abyss_mem(0);
-  abyss_i32_4x1 *out = (abyss_i32_4x1 *)abyss_mem(16);
 
-  int seed = 0x55;
-  seed = (i == 0) ? 1 : seed;
-  seed = (i == 1) ? 2 : seed;
-  seed = (i == 2) ? 3 : seed;
-  seed = (i == 3) ? 0x12345678 : seed;
-  (*seed_ptr)[i][0] = seed;
-  int acc = (*seed_ptr)[i][0];
+  int seeds[4] = {1, 2, 3, 0x12345678};
+  int *seed_ptr = (int *)abyss_mem(0);
+  int *out = (int *)abyss_mem(16);
+
+  seed_ptr[i] = seeds[i];
+  int acc = seed_ptr[i];
 
   for (int k = 0; k < ITERATIONS; k++) {
     acc = acc * 3 + k;
   }
 
-  (*out)[i][0] = acc;
+  out[i] = acc;
 }
