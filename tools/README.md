@@ -55,6 +55,7 @@ make -C test/matadd
 - `build/<case>.elf`：`ld.lld` 链接
 - `build/<case>.bin`：提取 `.text`
 - 调用根目录的 `make sim` 构建共享 RTL 仿真器，再运行 cocotb
+- DRAM 上电全为 0；C 内核负责写入测试输入，Python 只提供参考模型和断言
 
 测试产物位于 `test/<case>/build/`，已被 `.gitignore` 忽略。
 
@@ -75,7 +76,7 @@ make -C test/matadd ABYSS_CLANG=/path/to/clang LLVM_MC=/path/to/llvm-mc
 
 | 文件 | 作用 |
 | --- | --- |
-| `abyss.h` | `blockIdx/blockDim/threadIdx`、`abyss_mem()` 指针转换、`ABYSS_MATRIX`/`ABYSS_MAT_*` 类型与运算宏 |
+| `abyss.h` | `blockIdx/blockDim/threadIdx`、`abyss_mem()` 指针转换、`ABYSS_MATRIX` 二维数组类型与 `ABYSS_MAT_*` 运算宏 |
 | `run_abyss.py` | **已过时**：Python 功能模拟器，禁止用于验证 |
 | `render_raster.py` | **已过时**：基于 Python CPU 模型渲染，禁止用于验证 |
 | `pixels_to_image.py` | RTL 帧缓冲像素转 PNG/PPM，可作为库或命令行工具 |
@@ -94,29 +95,59 @@ int *C = (int *)abyss_mem(64);
 C[i] = A[i] + B[i];
 ```
 
-需要带维度/元素类型信息的矩阵时：
+需要带维度/元素类型信息的矩阵时，直接定义成 C 二维数组：
 
 ```c
 ABYSS_MATRIX(my_mat2x2i, int, 2, 2);
-ABYSS_MATRIX(my_mat2x3i, int, 2, 3);
 
 my_mat2x2i *A = (my_mat2x2i *)abyss_mem(0);
 my_mat2x2i *B = (my_mat2x2i *)abyss_mem(16);
 my_mat2x2i *C = (my_mat2x2i *)abyss_mem(32);
 
+(*C)[row][col] = (*A)[row][k] * (*B)[k][col];
 ABYSS_MAT_ADD(C, A, B);   // 维度/元素类型由 _Static_assert 检查
 ABYSS_MAT_MUL(C, A, B);   // 内维不匹配会在编译期报错
 ```
 
-`ABYSS_MATRIX` 是类型定义宏，`ABYSS_MAT_ADD` / `ABYSS_MAT_MUL` /
-`ABYSS_MAT_SCALE` 是运算宏。它们用 `sizeof` 推导 rows/cols、用
-`__builtin_types_compatible_p` 检查元素类型，因此非法运算不会拖到运行时。
+`ABYSS_MATRIX` 生成的是 `type[rows][cols]` 数组 typedef；数组类型本身携带形状，
+所以函数参数写成 `my_mat2x2i *` 就能保留完整维度信息。`ABYSS_MATRIX_ATTR(type)`
+默认使用自然元素对齐，可在包含头文件前覆盖它来追加项目自定义 attribute。
+`_Static_assert(sizeof(name) == sizeof(type) * rows * cols)` 再交叉校验扁平大小。
+
+仍然可以按一维索引或强制转换：
+
+```c
+int *flat = ABYSS_MAT_FLAT(A);
+flat[row * ABYSS_MAT_COLS(A) + col] = 0;
+
+int *raw = (int *)A;   // 显式转换同样允许
+raw[0] = 1;
+```
+
+`ABYSS_MAT_ADD` / `ABYSS_MAT_MUL` / `ABYSS_MAT_SCALE` 用 `sizeof` 推导
+rows/cols，用 `__builtin_types_compatible_p` 检查元素类型，因此非法运算不会拖到
+运行时。`abyss_mem()` 仍只做字节地址到指针的转换，保留对内存布局的精细控制。
+
+一维数据也直接用 `ABYSS_MATRIX` 表示，例如 `N x 1` 列向量：
+
+```c
+ABYSS_MATRIX(abyss_i32_8x1, int, 8, 1);
+
+abyss_i32_8x1 *A = (abyss_i32_8x1 *)abyss_mem(0);
+(*A)[i][0] = 1;
+
+int *flat = ABYSS_MAT_FLAT(A);
+flat[i] = 2;
+```
+
+矩阵类型就是统一的数组类型，`1 x N` 或 `N x 1` 都可以表示向量；需要扁平索引时
+使用 `ABYSS_MAT_FLAT`，需要显式转换时直接转换。
 
 Clang 本身还提供 `__attribute__((matrix_type(rows, cols)))` 和
 `__builtin_matrix_add/multiply`；ARM NEON 用 `int32x4_t` + intrinsics，CUDA 用
 `int4`/WMMA fragment 类型和 `threadIdx` 内置变量。当前 Abyss 最小后端还没有
-vector/matrix 类型的 lowering，所以先用普通 C struct + `_Static_assert` 实现同样的
-编译期约束；等后端支持向量类型后可以把这些宏替换成 Clang builtins。
+vector/matrix 类型的 lowering，所以这里先用标准 C 二维数组 + `_Static_assert`
+实现同样的编译期约束；等后端支持向量类型后可以把这些宏替换成 Clang builtins。
 
 ## C 语言子集
 

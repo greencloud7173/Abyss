@@ -7,7 +7,8 @@ class Memory:
         self.dut = dut
         self.addr_bits = addr_bits
         self.data_bits = data_bits
-        # Sparse storage: a flat list of 2**addr_bits entries is not viable for 32-bit addresses
+        # Sparse storage: absent addresses read as zero, so DRAM powers on
+        # fully zeroed.  Kernels are responsible for writing test inputs.
         self.memory = defaultdict(int)
         self.channels = channels
         self.name = name

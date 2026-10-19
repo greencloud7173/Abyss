@@ -15,7 +15,7 @@ void kernel(int N) {
 
   int acc = 0;
   for (int k = 0; k < N; k++)
-    acc += A->data[row][k] * B->data[k][col];
+    acc += (*A)[row][k] * (*B)[k][col];
 
-  C->data[row][col] = acc;
+  (*C)[row][col] = acc;
 }

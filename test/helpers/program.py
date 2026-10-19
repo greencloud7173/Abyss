@@ -1,9 +1,9 @@
 """Load Abyss test binaries and run a cocotb test case.
 
-The test entry files only need to provide:
-
-* the binary artifact name (for example ``"matadd"``), and
-* the original data-memory contents plus the thread count.
+The test entry files only need to provide the binary artifact name (for
+example ``"matadd"``), the thread count, and the Python reference model.
+DRAM powers on fully zeroed; the C kernel writes its own test inputs, so
+tests normally pass ``data=[]``.
 
 Everything else (program memory, data memory, clock/reset, run loop) is
 handled here.

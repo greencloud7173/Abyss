@@ -24,7 +24,8 @@ async def setup(
     # Load Program Memory
     program_memory.load(program)
 
-    # Load Data Memory
+    # DRAM powers on zeroed.  Kernels write their own inputs; data is only
+    # provided for the rare test that genuinely needs a preloaded address.
     data_memory.load(data)
 
     # Device Control Register

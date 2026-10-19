@@ -44,12 +44,10 @@ async def test_div(dut):
     b = [0, 2, 3, -1]
     z = [0, 0, 0, 0]
 
-    data = [u32(x) for x in a + b + z] + [0] * 32
-
     data_memory, _ = await run_case(
         dut,
         "div",
-        data=data,
+        data=[],
         threads=4,
         display=44,
     )

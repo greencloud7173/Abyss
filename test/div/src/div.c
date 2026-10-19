@@ -28,28 +28,46 @@
  * REM/REMU.  Adding the runtime zero defeats that fold, so the test really
  * exercises the hardware remainder instructions.
  */
+ABYSS_MATRIX(abyss_i32_4x1, int, 4, 1);
+ABYSS_MATRIX(abyss_i32_4x1_volatile, volatile int, 4, 1);
+ABYSS_MATRIX(abyss_i32_8x4, int, 8, 4);
+
 void kernel(void) {
   int i = __abyss_linear_idx();
-  int *a_ptr = (int *)abyss_mem(0);
-  int *b_ptr = (int *)abyss_mem(16);
-  int *z_ptr = (int *)abyss_mem(32);
-  int *out = (int *)abyss_mem(48);
+  abyss_i32_4x1 *a_ptr = (abyss_i32_4x1 *)abyss_mem(0);
+  abyss_i32_4x1 *b_ptr = (abyss_i32_4x1 *)abyss_mem(16);
+  abyss_i32_4x1_volatile *z_ptr = (abyss_i32_4x1_volatile *)abyss_mem(32);
+  abyss_i32_8x4 *out = (abyss_i32_8x4 *)abyss_mem(48);
 
-  int a = a_ptr[i];
-  int b = b_ptr[i];
-  int z = z_ptr[i];
+  int a = 0x55;
+  a = (i == 0) ? 1 : a;
+  a = (i == 1) ? -7 : a;
+  a = (i == 2) ? 0x7FFFFFFF : a;
+  a = (i == 3) ? (int)0x80000000u : a;
+  int b = 0x55;
+  b = (i == 0) ? 0 : b;
+  b = (i == 1) ? 2 : b;
+  b = (i == 2) ? 3 : b;
+  b = (i == 3) ? -1 : b;
+  (*a_ptr)[i][0] = a;
+  (*b_ptr)[i][0] = b;
+  (*z_ptr)[i][0] = 0;
+
+  a = (*a_ptr)[i][0];
+  b = (*b_ptr)[i][0];
+  int z = (*z_ptr)[i][0];
   int az = a + z;
   unsigned ua = (unsigned)a;
   unsigned ub = (unsigned)b;
   unsigned uz = (unsigned)z;
   unsigned uaz = ua + uz;
 
-  out[i] = a / b;
-  out[4 + i] = az % b;
-  out[8 + i] = (int)(ua / ub);
-  out[12 + i] = (int)(uaz % ub);
-  out[16 + i] = a / z;
-  out[20 + i] = az % z;
-  out[24 + i] = (int)(ua / uz);
-  out[28 + i] = (int)(uaz % uz);
+  (*out)[0][i] = a / b;
+  (*out)[1][i] = az % b;
+  (*out)[2][i] = (int)(ua / ub);
+  (*out)[3][i] = (int)(uaz % ub);
+  (*out)[4][i] = a / z;
+  (*out)[5][i] = az % z;
+  (*out)[6][i] = (int)(ua / uz);
+  (*out)[7][i] = (int)(uaz % uz);
 }

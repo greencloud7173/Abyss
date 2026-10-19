@@ -15,6 +15,13 @@ void kernel(void) {
   my_mat2x2i *B = (my_mat2x2i *)abyss_mem(16);
   my_mat2x2i *C = (my_mat2x2i *)abyss_mem(32);
 
+  /* Two-dimensional indexing: the typedef already carries [2][2]. */
+  (*C)[0][0] = (*A)[0][0] + (*B)[0][0];
+
+  /* Flat indexing and the explicit cast remain available. */
+  int *flat = ABYSS_MAT_FLAT(C);
+  flat[1] = (*A)[0][1] + (*B)[1][0];
+
   ABYSS_MAT_ADD(C, A, B);
   ABYSS_MAT_MUL(C, A, B);
 }

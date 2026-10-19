@@ -14,20 +14,32 @@
  *   words 24..27  (bytes  96..111) a >> sh       (signed -> SRA)
  *   words 28..31  (bytes 112..127) ua >> sh      (unsigned -> SRL)
  */
+ABYSS_MATRIX(abyss_i32_4x1, int, 4, 1);
+ABYSS_MATRIX(abyss_i32_6x4, int, 6, 4);
+
 void kernel(void) {
   int i = __abyss_linear_idx();
-  int *a_ptr = (int *)abyss_mem(0);
-  int *sh_ptr = (int *)abyss_mem(16);
-  int *out = (int *)abyss_mem(32);
+  abyss_i32_4x1 *a_ptr = (abyss_i32_4x1 *)abyss_mem(0);
+  abyss_i32_4x1 *sh_ptr = (abyss_i32_4x1 *)abyss_mem(16);
+  abyss_i32_6x4 *out = (abyss_i32_6x4 *)abyss_mem(32);
 
-  int a = a_ptr[i];
+  int a = 0x55;
+  a = (i == 0) ? 1 : a;
+  a = (i == 1) ? -8 : a;
+  a = (i == 2) ? 0x7FFFFFFF : a;
+  a = (i == 3) ? (int)0x80000000u : a;
+  int sh = i + 1;
+  (*a_ptr)[i][0] = a;
+  (*sh_ptr)[i][0] = sh;
+
+  a = (*a_ptr)[i][0];
   unsigned ua = (unsigned)a;
-  int sh = sh_ptr[i];
+  sh = (*sh_ptr)[i][0];
 
-  out[i] = a << 2;
-  out[4 + i] = a >> 1;
-  out[8 + i] = ua >> 1;
-  out[12 + i] = a << sh;
-  out[16 + i] = a >> sh;
-  out[20 + i] = ua >> sh;
+  (*out)[0][i] = a << 2;
+  (*out)[1][i] = a >> 1;
+  (*out)[2][i] = ua >> 1;
+  (*out)[3][i] = a << sh;
+  (*out)[4][i] = a >> sh;
+  (*out)[5][i] = ua >> sh;
 }

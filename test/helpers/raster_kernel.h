@@ -76,6 +76,8 @@
 _Static_assert(RASTER_AREA > 0, "raster triangle must not be degenerate");
 #define RASTER_PIXELS (RASTER_WIDTH * RASTER_HEIGHT)
 
+ABYSS_MATRIX(abyss_fb, volatile int, RASTER_HEIGHT, RASTER_WIDTH);
+
 _Static_assert(RASTER_WIDTH >= 4, "raster width is too small");
 _Static_assert(RASTER_HEIGHT >= 4, "raster height is too small");
 _Static_assert(RASTER_PIXELS > 0, "raster size must be positive");
@@ -96,7 +98,8 @@ void kernel(void) {
   const int area = RASTER_AREA;
   const int orient = RASTER_ORIENT;
 
-  volatile int *fb = (volatile int *)abyss_mem(0);
+  abyss_fb *fb = (abyss_fb *)abyss_mem(0);
+  volatile int *pixels = ABYSS_MAT_FLAT(fb);
   int tid = __abyss_linear_idx();
 
   /*
@@ -128,7 +131,7 @@ void kernel(void) {
     t = t & ~(t >> 31); /* clamp negative weights to zero */
 
     /* Blue at the edges, green in the center: 0x0000GGBB. */
-    fb[p] = ((t << 8) | (255 - t)) & inside;
+    pixels[p] = ((t << 8) | (255 - t)) & inside;
   }
 }
 

@@ -18,12 +18,10 @@ async def test_logic(dut):
     a = [0x12345678, -1, 0, i32(0x80000000)]
     b = [i32(0xF0F0F0F0), 0x00FF00FF, -1, 0x7FFFFFFF]
 
-    data = [u32(x) for x in a + b] + [0] * 32
-
     data_memory, _ = await run_case(
         dut,
         "logic",
-        data=data,
+        data=[],
         threads=4,
         display=0,
     )

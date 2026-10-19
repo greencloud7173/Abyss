@@ -14,9 +14,18 @@ void kernel(int N) {
   abyss_mat2x2i *B = (abyss_mat2x2i *)abyss_mem(16);
   abyss_mat2x2i *C = (abyss_mat2x2i *)abyss_mem(32);
 
+  /* Every thread writes the same input matrices, so no thread depends on
+   * another thread having completed its stores. */
+  for (int r = 0; r < N; r++)
+    for (int c = 0; c < N; c++) {
+      int v = r * N + c + 1;
+      (*A)[r][c] = v;
+      (*B)[r][c] = v;
+    }
+
   int acc = 0;
   for (int k = 0; k < N; k++)
-    acc += A->data[row][k] * B->data[k][col];
+    acc += (*A)[row][k] * (*B)[k][col];
 
-  C->data[row][col] = acc;
+  (*C)[row][col] = acc;
 }

@@ -18,12 +18,10 @@ async def test_slt(dut):
     a = [0, -1, 0x7FFFFFFF, i32(0x80000000)]
     b = [0, 1, 0x7FFFFFFF, -1]
 
-    data = [u32(x) for x in a + b] + [0] * 24
-
     data_memory, _ = await run_case(
         dut,
         "slt",
-        data=data,
+        data=[],
         threads=4,
         display=0,
     )

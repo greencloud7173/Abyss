@@ -221,8 +221,10 @@ void kernel(void) {
 }
 ```
 
-矩阵还可以用 `ABYSS_MATRIX` 声明带维度/元素类型的类型，再用 `ABYSS_MAT_ADD` / `ABYSS_MAT_MUL`
-让 `_Static_assert` 在**编译期**检查维度与元素类型（详见 [`tools/README.md`](tools/README.md)）。
+矩阵用 `ABYSS_MATRIX` 声明成真正的 C 二维数组类型，既支持 `(*A)[i][j]` 的二维访问，
+也允许 `ABYSS_MAT_FLAT(A)[idx]` 或强制转换做一维访问；一维数据统一写成 `N x 1` /
+`1 x N` 矩阵。`ABYSS_MAT_ADD` / `ABYSS_MAT_MUL` 会用数组类型和
+`_Static_assert` 在**编译期**检查维度与元素类型（详见 [`tools/README.md`](tools/README.md)）。
 
 支持的 C 子集：`int`/`unsigned`/`char`/`short`、算术、位运算、移位、除余、比较、分支、循环、
 `phi`/`select`、`alloca`、函数调用（≤8 参数）。不支持浮点、64 位、全局变量、PIC、libc、可变参数。
@@ -232,6 +234,7 @@ void kernel(void) {
 ## 测试
 
 每个用例的流程是"写 C → 编译链接 → 载入 RTL → 跑完 `done` → 用 Python 参考模型逐字比对内存"。
+数据内存上电全为 0，测试输入由 C 内核自己写入；Python 只保留参考模型和断言，不再预填 DRAM。
 
 | 用例 | 覆盖内容 |
 | - | - |

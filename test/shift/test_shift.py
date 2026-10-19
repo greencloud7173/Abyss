@@ -26,21 +26,16 @@ def sra(value, amount):
 
 @cocotb.test()
 async def test_shift(dut):
-    data = [
-        1, 0xFFFFFFF8, 0x7FFFFFFF, 0x80000000,  # a
-        1, 2, 3, 4,                              # sh
-    ]
+    a = [1, 0xFFFFFFF8, 0x7FFFFFFF, 0x80000000]
+    sh = [1, 2, 3, 4]
 
     data_memory, _ = await run_case(
         dut,
         "shift",
-        data=data,
+        data=[],
         threads=4,
         display=40,
     )
-
-    a = data[0:4]
-    sh = data[4:8]
 
     expected = [
         [sll(value, 2) for value in a],

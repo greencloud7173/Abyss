@@ -42,15 +42,13 @@ async def test_icache(dut):
     # 各线程 seed 不同，但迭代次数相同（没有分支发散支持，必须收敛）
     seeds = [1, 2, 3, 0x12345678]
 
-    data = [u32(x) for x in seeds] + [0] * 28
-
     stats = {"hits": 0, "misses": 0}
     watcher = cocotb.start_soon(_watch_icache(dut, stats))
     try:
         data_memory, cycles = await run_case(
             dut,
             "icache",
-            data=data,
+            data=[],
             threads=4,
             display=0,
         )
