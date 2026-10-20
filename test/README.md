@@ -179,7 +179,7 @@ make test matadd \
 | 标量用例（matadd 等） | 1.1 | 0.8 | 1.4× |
 
 ⚠️ 两个仿真器对**有符号除法溢出**的定义不同（`INT_MIN / -1`：Icarus 回绕成
-`0x80000000`，Verilator 给 `0`），这曾在 `div` 用例上暴露出来，现在 `alu.sv`
+`0x80000000`，Verilator 给 `0`），这曾在 `div` 用例上暴露出来，现在 `alu.v`
 已把该情况显式钉成 RISC-V 语义（商 `INT_MIN`、余 `0`）。
 
 ```bash

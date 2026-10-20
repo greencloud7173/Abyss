@@ -94,7 +94,7 @@ ifeq ($(SIM),verilator)
 # Verilator model of the whole GPU, shared by every test case (build/vsim).
 # `--public-flat-rw` lets cocotb reach internal signals through VPI;
 # `verilator.cpp` from cocotb drives cocotb's own scheduler.
-$(ROOT)/build/gpu.v: $(wildcard $(ROOT)/src/*.sv)
+$(ROOT)/build/gpu.v: $(wildcard $(ROOT)/src/*.v)
 	$(MAKE) -C $(ROOT) compile
 
 $(VLT_TOP): $(ROOT)/build/gpu.v $(VLT_CPP)

@@ -65,7 +65,7 @@ make -C test/matadd
 - `build-abyss-clang/bin/clang`：只包含 Abyss target 的本地 Clang
 - `build/bin/llvm-mc`、`build/bin/llvm-objcopy`
 - `ld.lld`（LLD 22 可用）
-- `iverilog`、`cocotb`、`sv2v`
+- `iverilog`、`cocotb`
 
 路径可以在命令行覆盖，例如：
 
@@ -248,7 +248,7 @@ C 点的角为钝角，三条边长互不相等。只改某个用例时，在该
 测试结束后会生成 `test/rasterNxN/build/rasterNxN.png`，同时导出
 `test/rasterNxN/build/rasterNxN.pixels.bin`（原始 32 位像素字）。
 
-RTL 配置为 **4 个 CU，每个 CU 8 线程/块**（`src/gpu.sv` 中的
+RTL 配置为 **4 个 CU，每个 CU 8 线程/块**（`src/gpu.v` 中的
 `NUM_CORES=4`、`THREADS_PER_BLOCK=8`）。仿真耗时随像素数增长，实测
 `16x16` 约 5 秒、`32x32` 约 23 秒、`64x64` 约 1.5 分钟、
 `128x128` 约 5 分钟；

@@ -16,7 +16,7 @@
 
 | 层 | 内容 |
 | - | - |
-| RTL | SystemVerilog，4 个 core × 8 线程，每线程独立的 ALU / LSU / PC / 寄存器堆 |
+| RTL | Verilog-2005，4 个 core × 8 线程，每线程独立的 ALU / LSU / PC / 寄存器堆 |
 | ISA | 43 条指令，RV32I + M 兼容（仅 `RET` 为自定义），32 位定长编码 |
 | 编译器 | `clang --target=abyss`（LLVM 22 后端 + Clang target），`ld.lld` 链接 |
 | 验证 | cocotb + Icarus Verilog / **Verilator**，整数与多分辨率光栅化 C 内核用例，逐拍执行 trace |
@@ -41,14 +41,14 @@
 ## 快速开始
 
 ```bash
-# 依赖：iverilog、sv2v、cocotb(+python3)、ld.lld；可选 Verilator（快 5×）
+# 依赖：iverilog、cocotb(+python3)、ld.lld；可选 Verilator（快 5×）
 # 编译器与汇编器来自本机的 LLVM 构建（见「C 工具链」一节）
 
 make test matadd      # 跑单个用例
 make test CASE=matadd # 等价写法
 make test_matadd      # 等价写法
 make sim              # 只构建 RTL 仿真器（build/sim.vvp）
-make compile          # 只做 sv2v 转换（SystemVerilog → Verilog）
+make compile          # 只把 src/*.v 拼成 build/gpu.v（单文件交给仿真器）
 ```
 
 运行结束后日志落在 `test/logs/`，里面包含初始数据内存、逐拍执行 trace 和最终数据内存。
@@ -64,19 +64,19 @@ make -C test/matadd ABYSS_CLANG=/path/to/clang LLVM_MC=/path/to/llvm-mc
 ## 仓库结构
 
 ```
-src/                  RTL（SystemVerilog）
-  gpu.sv              顶层：core 数组 + 内存控制器 + DCR
-  core.sv             fetcher / decoder / scheduler / 线程数组
-  scheduler.sv        8 状态控制流（IDLE → FETCH → DECODE → REQUEST → WAIT → EXECUTE → UPDATE → DONE）
-  fetcher.sv          PC 取指
-  decoder.sv          opcode → funct3 → funct7 三级译码，产出全部控制信号
-  alu.sv              算术 / 移位 / 比较 / 位运算 / 除法器
-  lsu.sv              字节地址 → 字地址 + lane，窄访存扩展与写掩码
-  pc.sv               分支条件、PC 相对跳转、JAL/JALR 链接值
-  registers.sv        32 × 32 位寄存器堆（x0 恒 0）
-  dispatch.sv         block 分配与 done
-  dcr.sv              Device Control Register（写入线程数）
-  controller.sv       内存请求仲裁
+src/                  RTL（Verilog-2005，从 SystemVerilog 用 sv2v 转换而来）
+  gpu.v               顶层：core 数组 + 内存控制器 + DCR
+  core.v              fetcher / decoder / scheduler / 线程数组
+  scheduler.v         8 状态控制流（IDLE → FETCH → DECODE → REQUEST → WAIT → EXECUTE → UPDATE → DONE）
+  fetcher.v           PC 取指
+  decoder.v           opcode → funct3 → funct7 三级译码，产出全部控制信号
+  alu.v               算术 / 移位 / 比较 / 位运算 / 除法器
+  lsu.v               字节地址 → 字地址 + lane，窄访存扩展与写掩码
+  pc.v                分支条件、PC 相对跳转、JAL/JALR 链接值
+  registers.v         32 × 32 位寄存器堆（x0 恒 0）
+  dispatch.v          block 分配与 done
+  dcr.v               Device Control Register（写入线程数）
+  controller.v        内存请求仲裁
 
 docs/isa.md           Abyss ISA 手册（唯一副本）
 docs/images/          架构图、trace 截图，以及 logo.png（由 raster512x512 用例渲染）
@@ -266,7 +266,7 @@ make test raster512x512
 cp test/raster512x512/build/raster512x512.png docs/images/logo.png
 ```
 
-全部用例通过（cocotb 2.1，Icarus Verilog 13 与 Verilator 5.046 两套后端结果一致），sv2v 与 iverilog 零告警。
+全部用例通过（cocotb 2.1，Icarus Verilog 13 与 Verilator 5.046 两套后端结果一致），iverilog 与 Verilator 零告警。
 
 ### 仿真器选择
 
@@ -285,7 +285,7 @@ make test raster128x128 SIM=icarus   # 需要回退到 iverilog 时
 
 Verilator 的安装（无需 root）与变量覆盖见 [`test/README.md`](test/README.md)。
 ❗ 两个仿真器对 `INT_MIN / -1` 这种有符号除法溢出的定义不同（Icarus 回绕成 `0x80000000`，
-Verilator 给 `0`），`alu.sv` 现在把该情况显式钉成 RISC-V 语义。
+Verilator 给 `0`），`alu.v` 现在把该情况显式钉成 RISC-V 语义。
 仿真可以在 `test/logs/` 里看到逐拍 trace：
 
 ![execution trace](docs/images/trace.png)

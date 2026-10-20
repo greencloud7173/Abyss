@@ -1,7 +1,7 @@
 # Abyss ISA 手册
 
 > **Abyss ISA**(2026-10 起启用此名)是 tiny-gpu 的 32 位 SIMD 指令集。
-> 适用实现:`src/decoder.sv`、`src/registers.sv`、`src/pc.sv`、`src/alu.sv`、`src/lsu.sv`(2026-10 版本)
+> 适用实现:`src/decoder.v`、`src/registers.v`、`src/pc.v`、`src/alu.v`、`src/lsu.v`(2026-10 版本)
 > 状态:`make test matadd`、`make test matmul` 均 PASS,iverilog 无位宽告警
 > (已用临时用例逐条验证 B 型六种分支条件、`LUI`/`AUIPC`/`JAL`/`JALR`、以及 6 条移位指令)。
 > **指令格式遵循 RISC-V**(字段位置、funct3/funct7 分派、opcode 低两位为 `11`、custom 段用官方保留编码);
@@ -154,7 +154,7 @@ RISC-V 保留的 custom 段分配(便于将来扩展,均已避开官方指令编
 
 ## 4. 指令集参考
 
-"控制信号"列是 `src/decoder.sv` 里的实际取值(未列出的控制信号保持 0)。
+"控制信号"列是 `src/decoder.v` 里的实际取值(未列出的控制信号保持 0)。
 
 ### 4.1 R 型算术(opcode `0110011` = RISC-V OP)
 
@@ -195,8 +195,8 @@ RISC-V 保留的 custom 段分配(便于将来扩展,均已避开官方指令编
   控制信号只有 `decoded_branch_enable` 与 `decoded_branch_cond = funct3`(不再有 `pc_mux`)。
 - 立即数是 **PC 相对字节偏移**(B 型 13 位有符号,`imm[0]` 恒 0;decoder 把它符号扩展成 32 位);**`offset` 相对于当前指令自身**,
   所以“跳过紧随其后的一条指令”写 `offset = 8`,`offset = 0` 则原地循环。
-- 偏移的 `>>> 2` 在 `src/pc.sv` 里只是**接线**:PC 以“指令条数”计,程序存储器按字寻址 ⇒ 字节偏移右移两位就是指令条数。
-- 比较在 `src/pc.sv` 里**每线程各做一次**,直接比较 `rs1`/`rs2`,不经 ALU、不写任何标志位。
+- 偏移的 `>>> 2` 在 `src/pc.v` 里只是**接线**:PC 以“指令条数”计,程序存储器按字寻址 ⇒ 字节偏移右移两位就是指令条数。
+- 比较在 `src/pc.v` 里**每线程各做一次**,直接比较 `rs1`/`rs2`,不经 ALU、不写任何标志位。
 
 ### 4.3 U 型、J 型与 JALR(高位立即数 / 跳转)
 
@@ -290,7 +290,7 @@ RISC-V 保留的 custom 段分配(便于将来扩展,均已避开官方指令编
 ## 5. 分支与跳转
 
 - 分支**没有标志寄存器**(已删除旧的 NZP):`Bcc rs1, rs2, offset` 在 `EXECUTE` 阶段直接比较两个操作数,
-  当拍决定是否跳转(`src/pc.sv`)。
+  当拍决定是否跳转(`src/pc.v`)。
 - 比较规则(与 RISC-V 一致):
 
 | funct3 | 指令 | 条件 | 比较方式 |
@@ -312,14 +312,14 @@ RISC-V 保留的 custom 段分配(便于将来扩展,均已避开官方指令编
   它与 `JAL`/`JALR` 都用 `reg_input_mux = 10` 从 PC 单元写回。
 - `JAL` / `JALR` / `AUIPC` 写入的 rd 值是 **字节地址**(PC × 4);与 B 型偏移保持同一套“PC 相关量按字节计”的约定。
 - 分支与比较是同一条指令 ⇒ 条件跳转**不再需要**“标志位先由另一条指令写入”(旧的 `CMP` + `BRnzp` 要隔一条)。
-- 实现细节(`src/pc.sv`):`rs_signed < rt_signed`(有符号)与 `rs < rt`(无符号)两个比较结果 + 一个 `case` 选条件;
+- 实现细节(`src/pc.v`):`rs_signed < rt_signed`(有符号)与 `rs < rt`(无符号)两个比较结果 + 一个 `case` 选条件;
   `>>> 2`、`PC*4` 与符号扩展都是接线,没有额外算术逻辑。
 - 无分支发散:一个 block 的 8 个线程各算各的条件,实际 PC 取**最后一个线程**的值
   (`current_pc <= next_pc[THREADS_PER_BLOCK-1]`),所以内核里要保持各线程控制流一致。
 
 ## 6. 执行模型与流水阶段
 
-每个 core 的状态机(`src/scheduler.sv`)固定 8 态,block 内所有线程同步前进:
+每个 core 的状态机(`src/scheduler.v`)固定 8 态,block 内所有线程同步前进:
 
 | core_state | 名称 | 本拍发生的事 |
 | - | - | - |
@@ -345,7 +345,7 @@ RISC-V 保留的 custom 段分配(便于将来扩展,均已避开官方指令编
 
 ### 6.1 指令 cache(2026-10)
 
-`src/fetcher.sv` 里每个 core 带一个**直接映射指令 cache**:
+`src/fetcher.v` 里每个 core 带一个**直接映射指令 cache**:
 
 | 项 | 取值 |
 | - | - |
@@ -353,7 +353,7 @@ RISC-V 保留的 custom 段分配(便于将来扩展,均已避开官方指令编
 | 索引 / 标记 | `index = pc[INDEX_BITS-1:0]`,`tag = pc[ADDR_BITS-1:INDEX_BITS]` |
 | 命中 | **完全不访问 program memory**;`instruction` 直接从 cache 取,`FETCH` 只占 1 拍 |
 | 未命中 | 发一次 `program_mem_read`,收到的字写回该行(数据 + tag + valid) |
-| 冲刷 | `flush` 拉高时整块失效;`core.sv` 在 `core_state == IDLE` 时拉高,即**每次新一轮执行前** |
+| 冲刷 | `flush` 拉高时整块失效;`core.v` 在 `core_state == IDLE` 时拉高,即**每次新一轮执行前** |
 | 计数 | `cache_hits` / `cache_misses`(32 位,可从 cocotb 层次化读取) |
 
 命中路径为什么能省两拍:命中时 fetcher 在 `FETCH` 那一拍就把 `instruction` 和
@@ -586,7 +586,7 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 | 向 `R29`–`R31` 写(`rd >= 29`) | 静默忽略,不产生写动作 |
 | `DIV`/`DIVU` 且 `rs2 == 0` | 返回全 1(`−1` / `0xFFFFFFFF`),不再传播 `x`(2026-10 起对齐 RISC-V) |
 | `REM`/`REMU` 且 `rs2 == 0` | 返回**被除数**(RISC-V 语义) |
-| `DIV`/`REM` 且 `rs1 = INT_MIN, rs2 = −1` | 商回绕成 `INT_MIN`,余数 0(两补码除法溢出)。⚠️ 这是 Verilog 的**实现相关**行为:同一份 `rs_signed / operand_b` 在 Icarus 下回绕成 `0x80000000`、在 Verilator 下给 `0`,所以 `alu.sv` 显式判断 `dividend_is_min && divisor_is_minus1`,不依赖仿真器 |
+| `DIV`/`REM` 且 `rs1 = INT_MIN, rs2 = −1` | 商回绕成 `INT_MIN`,余数 0(两补码除法溢出)。⚠️ 这是 Verilog 的**实现相关**行为:同一份 `rs_signed / operand_b` 在 Icarus 下回绕成 `0x80000000`、在 Verilator 下给 `0`,所以 `alu.v` 显式判断 `dividend_is_min && divisor_is_minus1`,不依赖仿真器 |
 | 读未初始化 / 越界的数据内存 | 测试的 `Memory` 是稀疏 `defaultdict(int)`,读到 0 |
 | 分支目标超出程序长度 | 取到全 0(NOP)后继续顺序执行,不 trap |
 | B/J 型偏移不是 4 的倍数 | 低两位被右移丢弃(硬件只取 `imm >>> 2`),等价于向下取整到 4 的倍数 |
@@ -616,7 +616,7 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 1. 测试字面量必须**正好 32 位**:旧的 33 字符写法直接搬过来会让 opcode 右移一位,`ADD` 变成 `DIV`,甚至触发除零 → `x`。
 2. `CONST` / `BRnzp` 的立即数位置、`nzp` 的位置都变了,必须整体重编码。
 3. `%blockIdx` / `%blockDim` / `%threadIdx` 的编号由 13 / 14 / 15 变为 29 / 30 / 31。
-4. **NZP 语义修正(2026-10)**:`src/alu.sv` 原先写成 `(rs - rt > 0)` / `(rs - rt < 0)` 形式的比较,而操作数是无符号的,于是 `nzp[2]` 实际是"不相等"、`nzp[0]` 恒为 0;现已改为有符号比较(见第 5 节)。修正后 `BRn LOOP`(mask `100`)才真正表示"`k < N`",此前只是恰好等价于它。
+4. **NZP 语义修正(2026-10)**:`src/alu.v` 原先写成 `(rs - rt > 0)` / `(rs - rt < 0)` 形式的比较,而操作数是无符号的,于是 `nzp[2]` 实际是"不相等"、`nzp[0]` 恒为 0;现已改为有符号比较(见第 5 节)。修正后 `BRn LOOP`(mask `100`)才真正表示"`k < N`",此前只是恰好等价于它。
 
 ### RISC-V 风格迁移(2026-10)
 
@@ -656,7 +656,7 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 | `LDR` / `STR` | 地址 = `rs1`(imm 字段未接入数据通路) | **地址 = `rs1` + sign_ext(imm12)**(RISC-V `lw`/`sw`) |
 | `STR` 的 S 型立即数 | 编码时恒为 0 | `imm[11:5]` + `imm[4:0]` 两段拼装,可用非 0 偏移 |
 
-影响:`lsu.sv` 增加符号扩展与一个 32 位地址加法器(每线程一个);`decoder` 增加 S 型立即数拼装(12 位);
+影响:`lsu.v` 增加符号扩展与一个 32 位地址加法器(每线程一个);`decoder` 增加 S 型立即数拼装(12 位);
 两个内核改用偏移寻址后分别少了 4 / 1 条指令,仿真时间从 4475 / 12300 µs 降到 3350 / 10100 µs。
 
 ### B 型条件分支与 NZP 的移除(2026-10)
@@ -670,8 +670,8 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 
 影响:
 
-1. `src/alu.sv` 删掉比较通路与 `decoded_alu_output_mux`,只剩 ADD/SUB/MUL/DIV。
-2. `src/pc.sv` 删掉 NZP 寄存器,改为“有符号/无符号两个比较结果 + `case` 选条件”;
+1. `src/alu.v` 删掉比较通路与 `decoded_alu_output_mux`,只剩 ADD/SUB/MUL/DIV。
+2. `src/pc.v` 删掉 NZP 寄存器,改为“有符号/无符号两个比较结果 + `case` 选条件”;
    PC 加法器的一个加数在 `imm >>> 2` 与 `1` 之间选择(纯接线,无新算术单元)。
 3. `decoder` 删掉 `decoded_nzp` / `decoded_nzp_write_enable` / `decoded_alu_output_mux` / `decoded_pc_mux`,
    新增 `decoded_branch_enable` / `decoded_branch_cond`;custom-0 / custom-1 重新变回预留。
@@ -690,8 +690,8 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 
 1. `decoder` 新增 `decoded_jump_enable`,新增 `JAL`/`LUI`/`AUIPC` 三个分支;`LUI` 靠把 `decoded_rs_address` 改成 0 复用 ADD
    (ALU 不变),`AUIPC`/`JAL` 只置 `reg_input_mux = 10`。
-2. `pc.sv` 新增 `pc_result` 输出(`PC*4 + (JAL ? 4 : imm)`)并送入寄存器堆,PC 加法器的一个加数在 `imm>>>2`、`1` 之间选。
-3. 立即数改成 32 位归一化后,`alu.sv`/`lsu.sv` 里的符号扩展代码全部删除(纯简化)。
+2. `pc.v` 新增 `pc_result` 输出(`PC*4 + (JAL ? 4 : imm)`)并送入寄存器堆,PC 加法器的一个加数在 `imm>>>2`、`1` 之间选。
+3. 立即数改成 32 位归一化后,`alu.v`/`lsu.v` 里的符号扩展代码全部删除(纯简化)。
 4. 指令类型 R/I/S/B/U/J **六种齐全**;当时仍缺的 `JALR`(I 型)已在同一月补上,见下一节。
 
 ### JALR(I 型,2026-10)
@@ -704,7 +704,7 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 影响:
 
 1. `decoder` 新增 `decoded_jalr_enable`(只多 1 位控制信号,B 型/U/J 型的路径不变)。
-2. `pc.sv` 的 A 端口多一个 2:1 mux(`PC_byte` / `rs1`),`next_pc` 前多一个目标 mux;**没有新增 32 位加法器**。
+2. `pc.v` 的 A 端口多一个 2:1 mux(`PC_byte` / `rs1`),`next_pc` 前多一个目标 mux;**没有新增 32 位加法器**。
 3. 调用/返回链路打通:`JAL ra, func` + `JALR x0, 0(ra)`。
    C 语言还缺:**字节/半字访存**、`SLT` 类,以及一套 ABI(栈指针、`ra`/参数用哪些寄存器);
    移位已在下一节补上。
@@ -723,7 +723,7 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
    后者靠 funct7(**I 型是 `imm[11:5]`**)区分逻辑/算术。
 2. 移位量直接取 **B 操作数的低 5 位** —— R 型时 B = rs2,I 型时 B = 立即数(`decoded_alu_imm_enable` 已经切好),
    **没有新增 mux**。RISC-V 的 `mod 32` 语义因此天然成立(`SLL rd, rs1, r` 里 r = 33 只移 1 位)。
-3. 操作码扩到 3 位 → `alu.sv` / `decoder.sv` / `core.sv` 三处同步;前 4 个操作的编码值保持不变。
+3. 操作码扩到 3 位 → `alu.v` / `decoder.v` / `core.v` 三处同步;前 4 个操作的编码值保持不变。
 4. 工具链:旧的 `tools/riscv2abyss.py`(已删除)删掉 `slli → MUL` 的 hack,`sll/srl/sra/slli/srli/srai` 现在直通;
    `start.s` 里为那个 hack 预置的三个常量(R23/R27/R28)可以删掉。
 5. 代价:**每线程一个 32 位桶形移位器**(5 级 2:1 mux),这是本次唯一的实际面积开销。
@@ -742,7 +742,7 @@ B 型“跳过下一条指令”(`offset = +8`)的六种条件编码(以 `R1, R2
 1. ⚠️ 踩到一个真实的 Verilog 坑:`alu_out_reg <= cond ? {N{1'b1}} : (rs_signed / operand_b);` 里
    因为一个分支是无符号字面量,整个条件表达式被当成**无符号**,`div` 静默变成了 `divu`
    (−7/2 得到 `0x7FFFFFFC`)。修法:先把四个结果算进各自 `signed`/无符号的中间 wire,再做 mux。
-2. 操作码扩到 4 位 → `alu.sv` / `decoder.sv` / `core.sv` 同步;前 7 个操作的编码值保持不变。
+2. 操作码扩到 4 位 → `alu.v` / `decoder.v` / `core.v` 同步;前 7 个操作的编码值保持不变。
 3. 四条除/余指令共用同一个除法器(商与余数通常同时可用),新增面积很少。
 4. 已验证:`−7/2 = −3`、`−7%2 = −1`、无符号 `0xFFFFFFF9/2 = 0x7FFFFFFC`、`0xFFFFFFF9%2 = 1`、
    四种除零情况、`INT_MIN / −1` 回绕。
@@ -807,9 +807,9 @@ instruction mnemonic"。
 
 影响:
 
-1. `alu.sv` 只加了两个比较器(`rs_signed < operand_b`、`rs < operand_b_unsigned`)
+1. `alu.v` 只加了两个比较器(`rs_signed < operand_b`、`rs < operand_b_unsigned`)
    和两条 `case` 分支,结果零扩展成 32 位;**没有新增 mux、也没有新增写回来源**。
-2. `decoder.sv` 的 `OP`/`OP_IMM` 两个 `case (funct3)` 各加两项(共 4 条指令)。
+2. `decoder.v` 的 `OP`/`OP_IMM` 两个 `case (funct3)` 各加两项(共 4 条指令)。
 3. ⚠️ `SLTIU` 的立即数**符号扩展后当无符号**比较(RISC-V 语义):`SLTIU rd, rs1, #-1` 是
    `rs1 < 0xFFFFFFFF`。C 里 `0u < -1` 那种写法、以及 `x < 0xFFFFFFFFu`,都会编译成它。
 4. 编码与 RISC-V 逐位一致:`SLT R4,R1,R2 = 0x0020A233`、`SLTU R5,R1,R2 = 0x0020B2B3`、
@@ -829,8 +829,8 @@ instruction mnemonic"。
 
 影响:
 
-1. `alu.sv` 只加三条 `case` 分支(`rs & operand_b` 等),**没有新增硬件**。
-2. `decoder.sv` 把原来的 `F3_DIV`/`F3_REM`/`F3_REMU` 三个 `case` 项合并成
+1. `alu.v` 只加三条 `case` 分支(`rs & operand_b` 等),**没有新增硬件**。
+2. `decoder.v` 把原来的 `F3_DIV`/`F3_REM`/`F3_REMU` 三个 `case` 项合并成
    `F3_XOR`/`F3_OR`/`F3_AND`,内部再用 `funct7` 分流 —— 代码反而更短,也更贴近 RISC-V 的真实布局。
 3. 旧翻译器(已删除)还顺便补了几个 clang 会产出的 RISC-V 伪指令:`zext.b`(→ `ANDI #255`)、
    `zext.h`(→ `SLLI 16` + `SRLI 16`)、`not`(→ `XORI #-1`)、`neg`(→ `SUB rd, x0, rs`)、
@@ -844,7 +844,7 @@ instruction mnemonic"。
 
 | 项 | 默认(FPGA 现实) | 可选(仿真更快) |
 | - | - | - |
-| `THREADS_PER_BLOCK`(`gpu.sv`) | **8** | 16 |
+| `THREADS_PER_BLOCK`(`gpu.v`) | **8** | 16 |
 | `DATA_MEM_NUM_CHANNELS` | **4** | 8(保持 2 线程/通道的比例) |
 | 总 lane 数 | 4 core × 8 = **32** | 4 core × 16 = 64 |
 | 测试 harness | 通道数从 `dut.data_mem_read_valid` 位宽推导,换宽度不用改 Python | 同左 |
@@ -881,9 +881,9 @@ $$\text{墙钟} \approx \frac{\text{线程数} / (\text{core 数} \times \text{l
 
 ### 多周期除法器:为 FPGA 可综合性改造(2026-10-18)
 
-- 把 `src/alu.sv` 里 4 个组合 `/` `%`(`div_signed` / `div_unsigned` / `rem_signed`
+- 把 `src/alu.v` 里 4 个组合 `/` `%`(`div_signed` / `div_unsigned` / `rem_signed`
   / `rem_unsigned`)换成**每拍 2 位**的迭代 restoring 除法器,32 位除法 16 拍完成。
-- 新增 `alu.div_busy` 输出,`core.sv` 做 OR-reduce 后送 `scheduler`,scheduler 在
+- 新增 `alu.div_busy` 输出,`core.v` 做 OR-reduce 后送 `scheduler`,scheduler 在
   `EXECUTE` 等它拉低才进 `UPDATE`。**`core_state` 编码保持 8 态 3 位不变**,
   `fetcher` / `decoder` / `lsu` / `registers` / `pc` 一行没动。
 - `x/0`、`INT_MIN / -1`、`INT_MIN % -1` 仍在当拍由 case 分支给出 RISC-V 语义。
@@ -895,13 +895,13 @@ $$\text{墙钟} \approx \frac{\text{线程数} / (\text{core 数} \times \text{l
 
 | 手册里的概念 | RTL 位置 |
 | - | - |
-| opcode / funct3 / funct7 分派、字段切片、控制信号 | `src/decoder.sv` |
-| 寄存器堆(x0 恒 0、R1–R28 可写、只读 29/30/31) | `src/registers.sv` |
-| 分支比较、PC 相对/寄存器间接跳转、`pc_result`(JAL/JALR/AUIPC 写回值)、PC 计算 | `src/pc.sv` |
-| 算术运算、立即数选择(ADDI / LUI)、移位、迭代除法器 | `src/alu.sv` |
-| `LDR` / `STR` / 窄访存的异步请求、字节地址→字地址+lane、扩展/掩码 | `src/lsu.sv` + `src/controller.sv` |
-| 8 态控制流 | `src/scheduler.sv` |
-| block 分配与 `done` | `src/dispatch.sv` |
+| opcode / funct3 / funct7 分派、字段切片、控制信号 | `src/decoder.v` |
+| 寄存器堆(x0 恒 0、R1–R28 可写、只读 29/30/31) | `src/registers.v` |
+| 分支比较、PC 相对/寄存器间接跳转、`pc_result`(JAL/JALR/AUIPC 写回值)、PC 计算 | `src/pc.v` |
+| 算术运算、立即数选择(ADDI / LUI)、移位、迭代除法器 | `src/alu.v` |
+| `LDR` / `STR` / 窄访存的异步请求、字节地址→字地址+lane、扩展/掩码 | `src/lsu.v` + `src/controller.v` |
+| 8 态控制流 | `src/scheduler.v` |
+| block 分配与 `done` | `src/dispatch.v` |
 | 反汇编(调试日志) | `test/helpers/format.py` |
 
 控制信号到数据通路的映射:
@@ -938,7 +938,7 @@ $$\text{墙钟} \approx \frac{\text{线程数} / (\text{core 数} \times \text{l
 **扩展方式**(新增指令):
 
 1. 选一个未分配的 opcode,或 R 型里未分配的 `funct3`/`funct7`(优先 RISC-V 保留的 custom 段 `xx11`);
-2. 在 `src/decoder.sv` 的 `case` 里加分支,置相应的控制信号;
+2. 在 `src/decoder.v` 的 `case` 里加分支,置相应的控制信号;
 3. 更新本手册第 2.2 / 4 / 7 节的表,以及 `test/helpers/format.py` 的反汇编表。
 
 未分配编码等同 `NOP`,所以新增指令**不会破坏**已有程序。
